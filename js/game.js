@@ -2080,6 +2080,7 @@ function loop(ts) {
   if (game.hitstop > 0) game.hitstop -= dt;      // 히트스톱: 짧은 정지 (타격감)
   else if (game.running && !game.panel) update(dt); // 패널 열림 = 일시정지
   render();
+  updateStatusBar();                              // IDE 하단 상태바
   requestAnimationFrame(loop);
 }
 
@@ -2105,3 +2106,46 @@ document.getElementById('retryBtn').addEventListener('click', () => {
   setBanner('재강림', '"이번엔 안 죽는다" — 덕산');
   say('ducksan', '부동산은 무슨. 판교를 접수하기 전엔 못 돌아간다.');
 });
+
+/* ============================================================
+   IDE 셸 연동 — 우측 세션 실황 피드 + 하단 상태바
+   (VSCode/Claude Code 창 안에서 게임하는 헌정 UI)
+   ============================================================ */
+const streamFeedEl = document.getElementById('streamFeed');
+function feedWhoLabel(w) { return w === '의장' ? '의장' : 'CG · Fable5'; }
+function populateStreamFeed() {
+  if (!streamFeedEl) return;
+  fetch('docs/session-stream.json?t=' + Date.now())
+    .then(r => r.json())
+    .then(d => {
+      const arr = d.stream || d;
+      const atBottom = streamFeedEl.scrollTop + streamFeedEl.clientHeight >= streamFeedEl.scrollHeight - 30;
+      streamFeedEl.innerHTML = '';
+      for (const e of arr) {
+        const m = document.createElement('div');
+        m.className = 'msg ' + (e.who === '의장' ? 'chair' : 'cg');
+        const who = document.createElement('div'); who.className = 'who'; who.textContent = feedWhoLabel(e.who);
+        const tx = document.createElement('div'); tx.className = 'txt'; tx.textContent = e.text;
+        m.appendChild(who); m.appendChild(tx);
+        streamFeedEl.appendChild(m);
+      }
+      if (atBottom) streamFeedEl.scrollTop = streamFeedEl.scrollHeight;
+    })
+    .catch(() => { streamFeedEl.innerHTML = '<div class="rp-empty">오프라인 — 로컬 서버로 열면 실황이 흘러듭니다</div>'; });
+}
+populateStreamFeed();
+setInterval(populateStreamFeed, 45000); // 준 실시간 갱신
+
+const _sb = {
+  act: document.getElementById('sb-act'), lv: document.getElementById('sb-lv'),
+  hp: document.getElementById('sb-hp'), kills: document.getElementById('sb-kills'),
+  combo: document.getElementById('sb-combo'),
+};
+function updateStatusBar() {
+  if (!player || !_sb.act) return;
+  _sb.act.textContent = 'ACT ' + game.act;
+  _sb.lv.textContent = 'Lv.' + player.level + (player.points > 0 ? ' ⚡' + player.points : '');
+  _sb.hp.textContent = 'HP ' + Math.max(0, Math.ceil(player.hp)) + '/' + player.maxHp;
+  _sb.kills.textContent = '처치 ' + game.kills;
+  _sb.combo.textContent = game.combo > 1 ? '⚔ ' + game.combo + ' COMBO' : '';
+}

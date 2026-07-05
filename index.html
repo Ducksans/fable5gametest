@@ -7,31 +7,113 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="wrap">
-  <canvas id="game" width="960" height="600"></canvas>
-  <div id="titleScreen">
-    <h1>판교 더 서바이벌</h1>
-    <h2>바이브 코딩 네크로맨서의 강림</h2>
-    <p class="epigraph">坐卽板橋<br><span>— 내가 앉은 자리가 곧 이천이자 판교다 —</span></p>
-    <p class="lore">"손코딩? 물리타격은 젊은 놈들이나 하는 거고."<br>
-    부동산 7년, 자전거 장사 7년의 야인 <b>덕산</b>이<br>
-    AI 바이브 코딩 흑마법을 깨우치고 판교역 3번 출구에 강림한다.</p>
-    <div class="keys">
-      <div><kbd>좌클릭</kbd> 이동 / 몬스터 클릭 = "저기 쳐!" 지휘</div>
-      <div><kbd>우클릭</kbd> 키보드 폭발 (커서 위치 시체 폭발)</div>
-      <div><kbd>Q</kbd> CG 스켈레톤 워리어 (물리딜)</div>
-      <div><kbd>W</kbd> GG 스켈레톤 메이지 (break 드릴)</div>
-      <div><kbd>E</kbd> AG 스톤 골렘 (탱커)</div>
-      <div><kbd>Space</kbd> 서브에이전트 웨이브 (캡 16)</div>
-      <div><kbd>R</kbd> 궁극기: PASS 선언</div>
-      <div><kbd>방향키</kbd> 보조 이동 · <kbd>M</kbd> BGM 켜기/끄기</div>
+<div id="ide">
+  <!-- 타이틀 바 -->
+  <div id="titlebar">
+    <div class="tb-left">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="tb-title">판교 더 서바이벌 — Pangyo Code</span>
+      <span class="tb-sub">네크로맨서 IDE · 3금강 에이전트 연결됨</span>
     </div>
-    <button id="startBtn">판교역 3번 출구로 강림</button>
+    <div class="tb-right"><span>⌄</span><span>⤢</span><span class="x">✕</span></div>
   </div>
-  <div id="gameOverScreen" class="hidden">
-    <h1 id="goTitle">YOU DIED</h1>
-    <p id="goDesc">덕산은 다시 부동산으로 돌아갔다...</p>
-    <button id="retryBtn">재강림 (다시 시작)</button>
+
+  <div id="ide-body">
+    <!-- 액티비티 바 -->
+    <div id="activity">
+      <div class="act-ic on" title="탐색기">🗂️</div>
+      <div class="act-ic" title="검색">🔍</div>
+      <div class="act-ic" title="소스 제어">⎇</div>
+      <div class="act-ic" title="실행/디버그">▶</div>
+      <div class="act-ic" title="확장">🧩</div>
+      <div class="act-ic bottom" title="3금강">👤</div>
+      <div class="act-ic" title="설정">⚙️</div>
+    </div>
+
+    <!-- 탐색기 -->
+    <div id="explorer">
+      <div class="exp-title">탐색기 — 판교_더_서바이벌</div>
+      <div class="tree">
+        <div class="node open">📂 판교_더_서바이벌</div>
+        <div class="node f d1">📄 덕산.exe <span class="tag">네크로맨서</span></div>
+        <div class="node d1 open">📂 3금강</div>
+        <div class="node f d2">🟢 CG_워리어.ts</div>
+        <div class="node f d2">🟣 GG_메이지.ts</div>
+        <div class="node f d2">⬜ AG_골렘.ts</div>
+        <div class="node f d1">🦴 서브에이전트_군단.json <span class="tag">×16</span></div>
+        <div class="node d1 open">📂 콘텐츠</div>
+        <div class="node f d2">🌳 스킬트리.tree</div>
+        <div class="node f d2">🎒 아이템.loot</div>
+        <div class="node f d2">👹 보스_로스터.rot</div>
+        <div class="node d1 open">📂 docs</div>
+        <div class="node f d2">🪷 issue_667_full.md</div>
+        <div class="node f d2">📜 발원문_0번.md</div>
+        <div class="node f d2 hot">💬 session-stream.json</div>
+        <div class="node f d1 dim">🗑️ vscode/ <span class="tag">20년전 삭제됨</span></div>
+      </div>
+      <div class="exp-foot">
+        // 10,000줄 코드 보다가<br>// "다 때려치고 게임하고 싶다"<br>// 던 개발자에게 바친다. 🎮
+      </div>
+    </div>
+
+    <!-- 에디터 (게임) -->
+    <div id="editor">
+      <div id="tabbar">
+        <span class="tab active">🎮 판교더서바이벌.exe</span>
+        <span class="tab">game.js</span>
+        <span class="tab">坐卽板橋.md</span>
+        <span class="tab dim">index.html <i>●</i></span>
+      </div>
+      <div id="breadcrumb">판교_더_서바이벌 › 덕산.exe › <span>main()</span> — 실행 중 ●</div>
+      <div id="stage">
+        <canvas id="game" width="960" height="600"></canvas>
+        <div id="titleScreen">
+          <h1>판교 더 서바이벌</h1>
+          <h2>바이브 코딩 네크로맨서의 강림</h2>
+          <p class="epigraph">坐卽板橋<br><span>— 내가 앉은 자리가 곧 이천이자 판교다 —</span></p>
+          <p class="lore">"손코딩? 물리타격은 젊은 놈들이나 하는 거고."<br>
+          부동산 7년, 자전거 장사 7년의 야인 <b>덕산</b>이<br>
+          AI 바이브 코딩 흑마법을 깨우치고 판교역 3번 출구에 강림한다.</p>
+          <div class="keys">
+            <div><kbd>좌클릭</kbd> 이동 / 몬스터 클릭 = "저기 쳐!" 지휘</div>
+            <div><kbd>우클릭</kbd> 키보드 폭발 (커서 위치 시체 폭발)</div>
+            <div><kbd>Q</kbd> CG 스켈레톤 워리어 (물리딜)</div>
+            <div><kbd>W</kbd> GG 스켈레톤 메이지 (break 드릴)</div>
+            <div><kbd>E</kbd> AG 스톤 골렘 (탱커)</div>
+            <div><kbd>Space</kbd> 서브에이전트 웨이브 (캡 16)</div>
+            <div><kbd>R</kbd> 궁극기: PASS 선언</div>
+            <div><kbd>방향키</kbd> 보조 이동 · <kbd>M</kbd> BGM · <kbd>K</kbd> 실황</div>
+          </div>
+          <button id="startBtn">판교역 3번 출구로 강림</button>
+        </div>
+        <div id="gameOverScreen" class="hidden">
+          <h1 id="goTitle">YOU DIED</h1>
+          <p id="goDesc">덕산은 다시 부동산으로 돌아갔다...</p>
+          <button id="retryBtn">재강림 (다시 시작)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 우측 세션 실황 패널 -->
+    <div id="rightpanel">
+      <div class="rp-title">💬 세션 실황 <span>이 채팅이 게임이 된다</span></div>
+      <div id="streamFeed"><div class="rp-empty">스트림 불러오는 중…</div></div>
+      <div class="rp-foot">준 실시간 · 매 턴 GitHub에 박제</div>
+    </div>
+  </div>
+
+  <!-- 상태 바 -->
+  <div id="statusbar">
+    <span class="sb-item accent">⎇ main</span>
+    <span class="sb-item" id="sb-act">ACT 1</span>
+    <span class="sb-item" id="sb-lv">Lv.1</span>
+    <span class="sb-item" id="sb-hp">HP 120/120</span>
+    <span class="sb-item" id="sb-kills">처치 0</span>
+    <span class="sb-item" id="sb-combo"></span>
+    <span class="sb-spacer"></span>
+    <span class="sb-item">🎮 네크로맨서 모드</span>
+    <span class="sb-item">UTF-8</span>
+    <span class="sb-item">坐卽板橋</span>
   </div>
 </div>
 <script src="js/audio.js"></script>
