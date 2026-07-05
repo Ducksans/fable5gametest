@@ -52,9 +52,11 @@ function resetGame() {
   };
   summons = []; enemies = []; projectiles = [];
   corpses = []; particles = []; orbs = []; texts = [];
+  minionBatchCd = 0;
 }
 
 let player, summons, enemies, projectiles, corpses, particles, orbs, texts;
+let minionBatchCd = 0;
 resetGame();
 
 // ---------- 소환수 정의 (로어 02~05) ----------
@@ -74,20 +76,26 @@ const SUMMON_DEFS = {
     range: 260, cooldown: 0.9, color: '#c792ea', ranged: true, unique: true,
     quote: 'GG 메이지 소환 — "무결성 드릴 발사 준비"',
   },
-  minion: { // 서브에이전트 스켈레톤 (로어 05: 동시 캡 16, 웨이브 운용)
-    name: '서브에이전트', cost: 8, hp: 30, dmg: 6, speed: 165, r: 8,
-    range: 22, cooldown: 0.6, color: '#e8e0c8',
+  minion: { // 서브에이전트 스켈레톤 (로어 05 정본: HP 1, 유지 45초, 배치 쿨 3초)
+    name: '서브에이전트', cost: 8, hp: 1, dmg: 6, speed: 165, r: 8,
+    range: 22, cooldown: 0.6, color: '#e8e0c8', duration: 45,
   },
 };
-const MINION_CAP = 16; // 로어 05/30: "동시 소환 캡 & fan-out 물량전"
+const MINION_CAP = 16;       // 로어 05/30: "동시 소환 캡 & fan-out 물량전"
+const MINION_BATCH_CD = 3;   // 로어 05/30: 배치당 3초
 
 function summon(type) {
   const d = SUMMON_DEFS[type];
   if (d.unique && summons.some(s => s.type === type && s.hp > 0)) {
     addText(player.x, player.y - 30, '이미 소환됨!', '#ff9c9c'); return;
   }
-  if (type === 'minion' && summons.filter(s => s.type === 'minion').length >= MINION_CAP) {
-    addText(player.x, player.y - 30, `캡 도달 (${MINION_CAP}) — 웨이브로 굴려라!`, '#ff9c9c'); return;
+  if (type === 'minion') {
+    if (minionBatchCd > 0) {
+      addText(player.x, player.y - 30, `배치 쿨타임 ${minionBatchCd.toFixed(1)}초`, '#ff9c9c'); return;
+    }
+    if (summons.filter(s => s.type === 'minion').length >= MINION_CAP) {
+      addText(player.x, player.y - 30, `캡 도달 (${MINION_CAP}) — 웨이브로 굴려라!`, '#ff9c9c'); return;
+    }
   }
   if (player.mana < d.cost) {
     addText(player.x, player.y - 30, '아메리카노 부족! (마나)', '#9cc4ff'); return;
@@ -97,7 +105,7 @@ function summon(type) {
   summons.push({
     type, ...d,
     x: player.x + Math.cos(a) * 40, y: player.y + Math.sin(a) * 40,
-    maxHp: d.hp, atkTimer: 0,
+    maxHp: d.hp, atkTimer: 0, lifeLeft: d.duration || Infinity,
   });
   if (d.quote) addText(player.x, player.y - 44, d.quote, '#ffd88a');
   spawnRing(player.x, player.y, d.color);
@@ -107,8 +115,14 @@ function castSkill(code) {
   if (code === 'Digit1') summon('golem');
   if (code === 'Digit2') summon('warrior');
   if (code === 'Digit3') summon('mage');
-  if (code === 'Space') { // 스켈레톤 웨이브: 한 번에 4기
-    for (let i = 0; i < 4; i++) summon('minion');
+  if (code === 'Space') { // 스켈레톤 웨이브: 한 번에 4기 (배치당 쿨 3초 — 로어 05)
+    if (minionBatchCd > 0) {
+      addText(player.x, player.y - 30, `배치 쿨타임 ${minionBatchCd.toFixed(1)}초`, '#ff9c9c');
+    } else {
+      const before = summons.filter(s => s.type === 'minion').length;
+      for (let i = 0; i < 4; i++) summon('minion');
+      if (summons.filter(s => s.type === 'minion').length > before) minionBatchCd = MINION_BATCH_CD;
+    }
   }
   if (code === 'KeyE') corpseExplosion();
   if (code === 'KeyR') passDeclaration();
@@ -155,7 +169,7 @@ function passDeclaration() {
   game.ultGauge = 0;
   game.shake = 16;
   setBanner('✅ PASS 선언!', '증거 확보 — 라운드 강제 클리어');
-  for (const e of [...enemies]) damageEnemy(e, 9999, '#7ee0a3');
+  for (const e of [...enemies]) damageEnemy(e, 9999, '#7ee0a3', { force: true });
   player.hp = Math.min(player.maxHp, player.hp + 30);
   for (let i = 0; i < 60; i++) {
     const a = rand(0, Math.PI * 2), sp = rand(100, 400);
@@ -169,8 +183,10 @@ function passDeclaration() {
 
 // ---------- 몬스터 (로어 22/24: 버그류 잡몹 도감) ----------
 const ENEMY_DEFS = {
-  nullptr: { name: 'Null Pointer', hp: 26, dmg: 8, speed: 95, r: 11, color: '#ff6b6b', xp: 6, coin: 1, label: 'null' },
-  infloop: { name: '무한 루프', hp: 44, dmg: 10, speed: 70, r: 13, color: '#f7c948', xp: 10, coin: 2, label: 'for(;;)', orbit: true },
+  // 로어 17 정본: 널포인터 슬라임 HP 40 · 공격 6 · 느림 · EXP 12
+  nullptr: { name: '널포인터 슬라임', hp: 40, dmg: 6, speed: 55, r: 12, color: '#ff6b6b', xp: 12, coin: 2, label: 'null' },
+  // 로어 17 정본: 무한루프 도깨비불 — 물리 면역, GG의 break 드릴 3발로만 소멸
+  infloop: { name: '무한루프 도깨비불', hp: 9999, dmg: 4, speed: 70, r: 13, color: '#5bc8f7', xp: 25, coin: 3, label: 'for(;;)', orbit: true, wisp: true },
   race:    { name: '레이스 컨디션', hp: 20, dmg: 12, speed: 150, r: 9, color: '#c792ea', xp: 9, coin: 2, label: 'race' },
   boss:    { name: '레거시 코드 골렘', hp: 900, dmg: 22, speed: 45, r: 34, color: '#b8860b', xp: 120, coin: 40, label: 'LEGACY', boss: true },
 };
@@ -186,7 +202,7 @@ function spawnEnemy(type, mult) {
   enemies.push({
     type, ...d,
     x, y, hp: d.hp * mult, maxHp: d.hp * mult, dmg: d.dmg * (0.8 + mult * 0.2),
-    atkTimer: 0, orbitA: rand(0, Math.PI * 2),
+    atkTimer: 0, orbitA: rand(0, Math.PI * 2), breakHits: 0,
   });
 }
 
@@ -196,23 +212,42 @@ function startWave() {
   const w = game.wave;
   const mult = 1 + (w - 1) * 0.25;
   if (w % 5 === 0) {
-    setBanner(`WAVE ${w} — 보스 출현`, '레거시 코드 골렘: "고치지 마... 돌아는 가잖아..."');
+    // 로어 20 정본 대사
+    setBanner(`WAVE ${w} — 보스 출현`, '"이 코드... 누가 짰지?" / "7년 전의 너다, 덕산." — 레거시 코드 골렘');
     spawnEnemy('boss', 1 + (w / 5 - 1) * 0.6);
     for (let i = 0; i < 4 + w; i++) spawnEnemy('nullptr', mult);
+  } else if (w === 7) {
+    // 로어 25: per_page exit4 대참사 — 슬라임 대량 스폰 (실화 기반)
+    setBanner('⚠️ exit code 4', 'per_page exit4 대참사 — 100댓글의 저주가 슬라임으로 강림한다');
+    for (let i = 0; i < 40; i++) spawnEnemy('nullptr', mult * 0.7);
   } else {
     setBanner(`WAVE ${w}`, w === 1 ? '판교역 3번 출구 — 길바닥 버그 파밍 시작' : '버그 스폰 감지');
     const n = 5 + w * 2;
     for (let i = 0; i < n; i++) {
       const roll = Math.random();
-      spawnEnemy(roll < 0.5 ? 'nullptr' : roll < 0.8 ? 'infloop' : 'race', mult);
+      // 도깨비불은 GG(break 드릴)가 필요하므로 웨이브 2부터 등장
+      const type = (w >= 2 && roll < 0.2) ? 'infloop' : roll < 0.75 ? 'nullptr' : 'race';
+      spawnEnemy(type, mult);
     }
   }
 }
 
 // ---------- 데미지/보상 ----------
-function damageEnemy(e, dmg, color) {
+function damageEnemy(e, dmg, color, opts) {
+  opts = opts || {};
+  if (e.wisp && !opts.force) {
+    // 로어 17: 무한루프는 두들겨 패는 게 아니라 조건을 끊는 것
+    if (!opts.drill) {
+      addText(e.x, e.y - e.r - 6, '면역! break 필요', '#5bc8f7', 0.5);
+      return;
+    }
+    e.breakHits++;
+    addText(e.x, e.y - e.r - 6, `break ${e.breakHits}/3`, '#5bc8f7', 0.7);
+    if (e.breakHits < 3) return;
+    dmg = e.hp; // 조건 충족 — 즉사
+  }
   e.hp -= dmg;
-  addText(e.x, e.y - e.r - 6, Math.floor(dmg), color || '#fff', 0.6);
+  if (!e.wisp) addText(e.x, e.y - e.r - 6, Math.floor(dmg), color || '#fff', 0.6);
   if (e.hp <= 0 && !e.dead) {
     e.dead = true;
     game.kills++;
@@ -266,6 +301,7 @@ function update(dt) {
   }
   player.mana = Math.min(player.maxMana, player.mana + player.manaRegen * dt);
   player.invuln = Math.max(0, player.invuln - dt);
+  minionBatchCd = Math.max(0, minionBatchCd - dt);
 
   // 소환수 AI
   for (const s of summons) {
@@ -302,6 +338,13 @@ function update(dt) {
       }
     }
   }
+  for (const s of summons) {
+    s.lifeLeft -= dt;
+    if (s.lifeLeft <= 0 && s.hp > 0) {
+      s.hp = 0; // 로어 05: 45초 유지 후 자동 귀환
+      addText(s.x, s.y - 14, '귀환', '#8a97b8', 0.6);
+    }
+  }
   summons = summons.filter(s => s.hp > 0);
 
   // 투사체 (GG 무결성 드릴)
@@ -310,7 +353,7 @@ function update(dt) {
     p.x += p.vx * dt; p.y += p.vy * dt;
     for (const e of enemies) {
       if (!e.dead && dist2(p, e) < (e.r + 5) * (e.r + 5)) {
-        damageEnemy(e, p.dmg, p.color);
+        damageEnemy(e, p.dmg, p.color, { drill: true }); // GG 무결성 break 드릴
         p.t = 99; break;
       }
     }
@@ -544,9 +587,9 @@ function render() {
   ctx.font = 'bold 13px sans-serif';
   ctx.fillText(`WAVE ${game.wave}`, W - 16, 26);
   ctx.font = '11px sans-serif';
-  ctx.fillText(`처치 ${game.kills} · 코인 ${game.coins}`, W - 16, 44);
+  ctx.fillText(`처치 ${game.kills} · 커밋토큰 ${game.coins}`, W - 16, 44);
   const mc = summons.filter(s => s.type === 'minion').length;
-  ctx.fillText(`서브에이전트 ${mc}/${MINION_CAP}`, W - 16, 60);
+  ctx.fillText(`서브에이전트 ${mc}/${MINION_CAP}` + (minionBatchCd > 0 ? ` · 배치쿨 ${minionBatchCd.toFixed(1)}s` : ''), W - 16, 60);
 
   // 배너
   if (game.banner) {
