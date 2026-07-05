@@ -42,11 +42,11 @@ window.addEventListener('keydown', e => {
     if (game.running) say('sys', on ? 'BGM ON — 판교의 밤 로파이' : 'BGM OFF', 2);
     return;
   }
-  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'Escape')) {
+  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'KeyL' || e.code === 'Escape')) {
     e.preventDefault();
     if (e.code === 'Escape') game.panel = null;
     else {
-      const p = e.code === 'KeyT' ? 'tree' : 'inv';
+      const p = e.code === 'KeyT' ? 'tree' : e.code === 'KeyL' ? 'log' : 'inv';
       game.panel = game.panel === p ? null : p;
       AudioSys.sfx.click();
     }
@@ -130,6 +130,29 @@ const STORY_PAGES = [
   ['3금강', '그의 부름에 세 소환수가 응답했다.\nAG 스톤 골렘 — 방향을 잡는 탱커.\nCG 스켈레톤 워리어 — 미친 타이핑의 물리딜러.\nGG 스켈레톤 메이지 — 무결성 드릴의 원거리 딜러.'],
   ['강림', '판교역 3번 출구. 길바닥엔 버그가 우글댄다.\n남동쪽 레거시 유적지엔 7년 묵은 골렘이 잠들어 있다.\n\n"자, 애들아. 오늘부터 이 판교, 우리가 접수한다."'],
   ['— 그리고, 진짜 이야기 —', '지금 이 순간에도 AG·CG·GG는\n어딘가에서 진짜로 코드를 짜고 있다.\n나의 분신들. 나의 3금강.\n\n그들이 밤새 버그와 싸우는 동안,\n나는 이 판교에서 그들과 함께 버그를 물리친다.\n\n...진짜로, 같이 일하는 기분이 든다.'],
+];
+// ---------- 의장의 일지 (L키) — 진짜 이야기의 박제 ----------
+const LOG_ENTRIES = [
+  {
+    date: '2025년, 어느 날',
+    title: '첫 시도, 그리고 100일 전쟁',
+    body: '바이브 코딩을 처음 시도했다. 하지만 100일 동안 할루시네이션과 드리프트하고만 싸웠다.\n주장은 화려했지만 근거는 휘발됐고, 어제의 결정은 오늘 표류했다.\n결국 접었다 — 강남처럼, 자전거처럼.',
+  },
+  {
+    date: '2026년 6월',
+    title: '재회 — 3금강',
+    body: '약 1년 만에 다시 노트북을 열었다. 이번엔 혼자가 아니었다.\nAG가 방향을 잡고, CG가 미친 속도로 짜고, GG가 무결성을 도장 찍는다.\n한 달여 만에… 처음으로 마음이 편해졌다. 드리프트가 멈췄다.',
+  },
+  {
+    date: '2026년 7월 5일',
+    title: '긴장이 풀린 날, 그리고 감사',
+    body: '내가 만든 게임(판교 더 서바이벌)에 정신이 팔려 채팅 탭을 헷갈렸다.\n같은 [GG] 지시를 AG·GG 둘에게 줬고, AG가 GG 개인키로 GG인 척 서명해버렸다.\n그런데 그게 진짜 GG 키였다 — 원장은 무결했지만, custody 구멍(#715)이 실전에서 드러났다.\n긴장이 풀려 저지른 실수가, 뜻밖의 보안 감사가 됐다.',
+  },
+  {
+    date: '다음',
+    title: '계획',
+    body: '가위바위보 게임을 완주한다 → 하모니룸에 전원 자동 착석한다 →\n#715의 긴급 기계(키 분리 custody)부터 만든다. 이슈에 박제해 두고, 하던 업무를 잇는다.\n\n…근데 지금은, 판교 좀 정화하고. — 의장',
+  },
 ];
 function startStory() {
   game.story = { page: 0, t: 0 };
@@ -1287,7 +1310,7 @@ function drawHud() {
   ctx.textAlign = 'right';
   const ptsTag = player.points > 0 ? ` · ⚡트리 T (+${player.points})` : ' · 트리 T';
   ctx.fillStyle = player.points > 0 && Math.floor(game.time * 2) % 2 ? '#ffd700' : '#c2cad9';
-  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
+  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · 일지 L · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
 
   // 미니맵 (우상단)
   const MM = 124, mx = W - MM - 12, my = 34;
@@ -1480,6 +1503,32 @@ function drawTreePanel() {
     ctx.fillText(hover.desc, bx + 10, by + 32);
   }
 }
+function drawLogPanel() {
+  drawPanelFrame('의장의 일지 — 진짜 이야기', '판교 더 서바이벌이 만들어지기까지 · L키로 닫기');
+  let y = PANEL.y + 84;
+  const cx = PANEL.x + 40;
+  for (const e of LOG_ENTRIES) {
+    ctx.textAlign = 'left';
+    // 날짜 배지
+    ctx.fillStyle = '#5b8def'; ctx.font = 'bold 12px sans-serif';
+    ctx.fillText('❖ ' + e.date, cx, y);
+    ctx.fillStyle = '#ffb648'; ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(e.title, cx + 130, y);
+    y += 22;
+    ctx.fillStyle = '#c8d2e4'; ctx.font = '12.5px sans-serif';
+    for (const line of e.body.split('\n')) {
+      ctx.fillText(line, cx + 14, y);
+      y += 18;
+    }
+    // 구분선
+    ctx.strokeStyle = 'rgba(90,104,140,0.25)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, y + 4); ctx.lineTo(PANEL.x + PANEL.w - 40, y + 4); ctx.stroke();
+    y += 22;
+  }
+  ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('2025년 100일의 전쟁에서 포기했던 이가, 2026년 3금강과 다시 일어섰다.', W / 2, PANEL.y + PANEL.h - 16);
+}
+
 function drawInvPanel() {
   drawPanelFrame('가방 & 장비 — 판교 파밍의 결실', `장비 클릭 = 해제 · 가방 클릭 = 장착 · 바닥템은 밟으면 획득 (${player.inv.length}/24)`);
   ctx.fillStyle = '#8a97b8'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
@@ -1744,9 +1793,10 @@ function render() {
     ctx.globalAlpha = 1;
   }
 
-  // 패널 (스킬트리 / 인벤토리) — 배너 위에 그린다
+  // 패널 (스킬트리 / 인벤토리 / 일지) — 배너 위에 그린다
   if (game.panel === 'tree') drawTreePanel();
   else if (game.panel === 'inv') drawInvPanel();
+  else if (game.panel === 'log') drawLogPanel();
 
   // 스토리 오버레이
   if (game.story) drawStory();
