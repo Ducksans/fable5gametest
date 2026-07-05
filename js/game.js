@@ -42,11 +42,11 @@ window.addEventListener('keydown', e => {
     if (game.running) say('sys', on ? 'BGM ON — 판교의 밤 로파이' : 'BGM OFF', 2);
     return;
   }
-  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'KeyL' || e.code === 'KeyK' || e.code === 'Escape')) {
+  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'KeyL' || e.code === 'KeyK' || e.code === 'KeyC' || e.code === 'Escape')) {
     e.preventDefault();
     if (e.code === 'Escape') game.panel = null;
     else {
-      const p = e.code === 'KeyT' ? 'tree' : e.code === 'KeyL' ? 'log' : e.code === 'KeyK' ? 'stream' : 'inv';
+      const p = e.code === 'KeyT' ? 'tree' : e.code === 'KeyL' ? 'log' : e.code === 'KeyK' ? 'stream' : e.code === 'KeyC' ? 'char' : 'inv';
       game.panel = game.panel === p ? null : p;
       if (game.panel === 'stream') loadStream(); // 열 때마다 최신 스트림 fetch
       AudioSys.sfx.click();
@@ -200,12 +200,46 @@ function newPlayer() {
   return {
     x: 320, y: 320, r: 14,
     hp: 120, maxHp: 120, baseMaxHp: 120,
-    mana: 100, maxMana: 100, manaRegen: 9, baseManaRegen: 9,
+    mana: 100, maxMana: 100, baseMaxMana: 100, manaRegen: 9, baseManaRegen: 9,
     speed: 195, baseSpeed: 195,
     level: 1, xp: 0, xpNext: 30,
     invuln: 0, moveTarget: null,
     points: 0, tree: {},           // 스킬트리: {nodeId: rank}
     inv: [], equip: {},            // 아이템: 인벤토리 배열, 슬롯별 장착
+    // 캐릭터 정체성 (A)
+    charName: '덕산', classId: 'necro', tint: '#f5f5f0', auraTint: '#c792ea',
+    // 스탯 (B) — str 소환딜 · dex 공속/크리 · int 폭발딜/마나 · vit 최대HP
+    stats: { str: 5, dex: 5, int: 5, vit: 5 }, statPoints: 0,
+  };
+}
+
+// ---------- 클래스 (A) — 시작 스탯·보너스가 다른 소환 아키타입 ----------
+const CLASSES = [
+  { id: 'necro', name: '조폭 네크로맨서', icon: '💀', color: '#ffb648',
+    desc: '균형 소환사. 3금강을 고루 부린다.', tag: '"손코딩? 젊은 놈들이나."',
+    stats: { str: 6, dex: 6, int: 6, vit: 6 }, tint: '#f5f5f0', auraTint: '#c792ea' },
+  { id: 'cg', name: '손코딩 군단장', icon: '🟢', color: '#7ee0a3',
+    desc: 'CG 워리어 특화 — 소환수 물리딜↑. 힘(STR) 위주.', tag: '"미친 타이핑, 시작."',
+    stats: { str: 10, dex: 7, int: 3, vit: 6 }, tint: '#d8f5e2', auraTint: '#7ee0a3' },
+  { id: 'gg', name: '무결성 감사관', icon: '🟣', color: '#c792ea',
+    desc: 'GG 메이지·시체폭발 특화 — 폭발/드릴딜↑. 지능(INT) 위주.', tag: '"주장은 도장 전엔 잠정."',
+    stats: { str: 3, dex: 6, int: 11, vit: 6 }, tint: '#efe0ff', auraTint: '#c792ea' },
+  { id: 'tank', name: '야인 골렘술사', icon: '⬜', color: '#8a97b8',
+    desc: 'AG 골렘 특화 — 생존·최대HP↑. 체력(VIT) 위주.', tag: '"방향은 내가 잡는다."',
+    stats: { str: 6, dex: 3, int: 4, vit: 12 }, tint: '#e6e9f2', auraTint: '#8fc8ff' },
+];
+function classById(id) { return CLASSES.find((c) => c.id === id) || CLASSES[0]; }
+
+// 스탯 파생 계수 — 전투 전반에 실제 반영
+function statFactor() {
+  const s = player.stats || { str: 5, dex: 5, int: 5, vit: 5 };
+  return {
+    minionDmg: 1 + (s.str - 5) * 0.03,   // 힘 → 소환수 데미지
+    boomDmg: 1 + (s.int - 5) * 0.03,     // 지능 → 폭발/드릴 데미지
+    atkSpd: 1 + (s.dex - 5) * 0.02,      // 민첩 → 공속
+    critBonus: (s.dex - 5) * 0.008,      // 민첩 → 추가 크리 확률
+    hpBonus: (s.vit - 5) * 8,            // 체력 → 최대 HP
+    manaBonus: (s.int - 5) * 4,          // 지능 → 최대 마나
   };
 }
 
@@ -353,14 +387,16 @@ function getStat(key) {
   return v;
 }
 function applyDerived() {
-  const ratio = player.hp / player.maxHp;
-  player.maxHp = Math.round(player.baseMaxHp + getStat('maxHp'));
+  const ratio = player.maxHp ? player.hp / player.maxHp : 1;
+  const sf = statFactor();
+  player.maxHp = Math.round(player.baseMaxHp + getStat('maxHp') + sf.hpBonus);
   player.hp = Math.min(player.maxHp, Math.max(1, Math.round(player.maxHp * ratio)));
+  player.maxMana = Math.round((player.baseMaxMana || player.maxMana) + sf.manaBonus);
   player.manaRegen = player.baseManaRegen + getStat('manaRegen');
   player.speed = player.baseSpeed * (1 + getStat('moveSpd'));
 }
 function minionDmgFactor() {
-  let f = 1 + getStat('minionDmg');
+  let f = (1 + getStat('minionDmg')) * statFactor().minionDmg;
   if (getStat('trinity') > 0 &&
       summons.some(s => s.type === 'warrior') && summons.some(s => s.type === 'mage') && summons.some(s => s.type === 'golem')) f *= 1.3;
   return f;
@@ -477,7 +513,7 @@ function castSkill(code) {
 function explodeCorpse(c, mult) {
   c.used = true;
   const buck = getStat('buckshot') > 0;
-  let dmg = (32 + player.level * 6) * (1 + getStat('boomDmg')) * (buck ? 1.15 : 1) * mult;
+  let dmg = (32 + player.level * 6) * (1 + getStat('boomDmg')) * statFactor().boomDmg * (buck ? 1.15 : 1) * mult;
   let crit = false;
   if (getStat('crit') > 0 && Math.random() < 0.3) { dmg *= 1.5; crit = true; } // 청축 각성
   const shrapnel = 14 + (buck ? 8 : 0);
@@ -694,7 +730,7 @@ function damageEnemy(e, dmg, color, opts) {
   }
   // 크리티컬 히트 (juice)
   let crit = false;
-  if (!opts.force && !e.wisp && Math.random() < 0.12) { dmg *= 1.7; crit = true; game.shake = Math.max(game.shake, 4); }
+  if (!opts.force && !e.wisp && Math.random() < 0.12 + statFactor().critBonus) { dmg *= 1.7; crit = true; game.shake = Math.max(game.shake, 4); }
   e.hp -= dmg;
   AudioSys.sfx.hit();
   if (!e.wisp) {
@@ -751,13 +787,14 @@ function gainXp(v) {
     player.level++;
     player.xpNext = Math.floor(player.xpNext * 1.35);
     player.baseMaxHp += 14;
-    player.maxMana += 8; player.mana = player.maxMana;
+    player.baseMaxMana += 8;
     player.points++;
+    player.statPoints += 3;      // B: 레벨업마다 스탯 포인트 +3
     applyDerived();
-    player.hp = player.maxHp;
+    player.hp = player.maxHp; player.mana = player.maxMana;
     AudioSys.sfx.levelup();
-    setBanner(`LEVEL UP! Lv.${player.level}`, `스킬 포인트 +1 (보유 ${player.points}) — T키로 스킬트리`);
-    once('treeHint', () => say('sys', 'T키: 스킬트리 (소환계·레거시 시학·야인의 근성) · I키: 가방/장비', 6));
+    setBanner(`LEVEL UP! Lv.${player.level}`, `스킬 +1 · 스탯 +3 — T 스킬트리 · C 캐릭터`);
+    once('treeHint', () => say('sys', 'T: 스킬트리 · C: 캐릭터/스탯 · I: 가방/장비', 6));
     for (const s of summons) { s.dmg *= 1.08; s.maxHp *= 1.08; s.hp = s.maxHp; }
   }
   if (player.level > lv0) saveGame(); // 레벨업 = 진행 저장
@@ -842,7 +879,7 @@ function update(dt) {
         s.x += (target.x - s.x) / d * s.speed * aura * dt;
         s.y += (target.y - s.y) / d * s.speed * aura * dt;
       } else if (s.atkTimer <= 0) {
-        s.atkTimer = s.cooldown / aura;
+        s.atkTimer = s.cooldown / (aura * statFactor().atkSpd);
         const dmg = s.dmg * minionDmgFactor();
         if (s.ranged) {
           AudioSys.sfx.drill();
@@ -1312,8 +1349,10 @@ function drawDucksan(s) {
   const y = s.y - bob;
   ctx.save();
   if (player.invuln > 0 && Math.floor(game.time * 20) % 2) ctx.globalAlpha = 0.45;
+  const aura = player.auraTint || '#c792ea';
+  const shirt = player.tint || '#f5f5f0';
   shadow(s, player.r, 0.45);
-  groundGlow(s, player.r * 2.6, '#c792ea', 0.18); // 네크로 오라
+  groundGlow(s, player.r * 2.6, aura, 0.18); // 네크로 오라 (코스튬 색)
   // 다리 (사각팬티 + 맨다리)
   ctx.fillStyle = '#e8e8e0';
   ctx.fillRect(s.x - 6, y - 8, 12, 6); // 팬티
@@ -1321,8 +1360,8 @@ function drawDucksan(s) {
   ctx.beginPath();
   ctx.moveTo(s.x - 3, y - 3); ctx.lineTo(s.x - 4, s.y);
   ctx.moveTo(s.x + 3, y - 3); ctx.lineTo(s.x + 4, s.y); ctx.stroke();
-  // 런닝셔츠 몸통
-  ctx.fillStyle = '#f5f5f0';
+  // 런닝셔츠 몸통 (코스튬 색)
+  ctx.fillStyle = shirt;
   ctx.beginPath();
   ctx.moveTo(s.x - 6, y - 8); ctx.lineTo(s.x - 5, y - 20);
   ctx.lineTo(s.x + 5, y - 20); ctx.lineTo(s.x + 6, y - 8); ctx.closePath(); ctx.fill();
@@ -1344,12 +1383,16 @@ function drawDucksan(s) {
   ctx.beginPath();
   ctx.moveTo(s.x - 3, hy + 1); ctx.lineTo(s.x - 1, hy + 1);
   ctx.moveTo(s.x + 1, hy + 1); ctx.lineTo(s.x + 3, hy + 1); ctx.stroke();
-  // 손끝 네크로 룬
+  // 손끝 네크로 룬 (코스튬 색)
   ctx.save(); ctx.globalCompositeOperation = 'lighter';
-  ctx.fillStyle = rgba('#c792ea', 0.6 + Math.sin(game.time * 6) * 0.3);
+  ctx.fillStyle = rgba(aura, 0.6 + Math.sin(game.time * 6) * 0.3);
   ctx.beginPath(); ctx.arc(s.x - 9, y - 12 + armSw, 2.5, 0, Math.PI * 2);
   ctx.arc(s.x + 9, y - 12 - armSw, 2.5, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
+  // 이름표
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(player.charName || '덕산', s.x, y - 34);
+  ctx.fillStyle = '#ffe0a0'; ctx.fillText(player.charName || '덕산', s.x, y - 35);
   ctx.restore();
 }
 
@@ -1492,7 +1535,8 @@ function drawHud() {
   ctx.textAlign = 'right';
   const ptsTag = player.points > 0 ? ` · ⚡트리 T (+${player.points})` : ' · 트리 T';
   ctx.fillStyle = player.points > 0 && Math.floor(game.time * 2) % 2 ? '#ffd700' : '#c2cad9';
-  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · 일지 L · 실황 K · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
+  const spTag = (player.statPoints > 0) ? ` · 캐릭터 C(+${player.statPoints})` : ' · 캐릭터 C';
+  ctx.fillText(`Lv.${player.level}${ptsTag}${spTag} · 가방 I · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 230, 17);
 
   // 미니맵 (우상단)
   const MM = 124, mx = W - MM - 12, my = 34;
@@ -1609,6 +1653,7 @@ function panelClick(sx, sy) {
   if (sx > PANEL.x + PANEL.w - 34 && sx < PANEL.x + PANEL.w - 6 && sy > PANEL.y + 6 && sy < PANEL.y + 34) {
     game.panel = null; return;
   }
+  if (game.panel === 'char') { charPanelClick(sx, sy); return; }
   if (game.panel === 'tree') {
     for (const n of TREE) {
       const p = nodePos(n);
@@ -1766,6 +1811,81 @@ function drawStreamPanel() {
   }
   ctx.fillStyle = '#6a7690'; ctx.font = 'italic 10px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('…이 순간도 흘러들고 있다 — 坐卽板橋', W / 2, PANEL.y + PANEL.h - 9);
+}
+
+// ---------- 캐릭터 시트 (C) — 스탯 배분·리스펙 ----------
+const STAT_DEFS = [
+  { k: 'str', name: '힘 (STR)', eff: '소환수 데미지 +3%/pt' },
+  { k: 'dex', name: '민첩 (DEX)', eff: '공속·크리 확률 상승' },
+  { k: 'int', name: '지능 (INT)', eff: '폭발/드릴 데미지·최대 마나' },
+  { k: 'vit', name: '체력 (VIT)', eff: '최대 HP +8/pt' },
+];
+function statBtnPos(i) { return { x: PANEL.x + 300, y: PANEL.y + 118 + i * 46 }; }
+function charPanelClick(sx, sy) {
+  // 스탯 + 버튼
+  for (let i = 0; i < STAT_DEFS.length; i++) {
+    const p = statBtnPos(i);
+    if (sx > p.x && sx < p.x + 30 && sy > p.y - 16 && sy < p.y + 8) {
+      if (player.statPoints > 0) { player.stats[STAT_DEFS[i].k]++; player.statPoints--; applyDerived(); AudioSys.sfx.levelup(); saveGame(); }
+      return;
+    }
+  }
+  // 리스펙 버튼
+  if (sx > PANEL.x + 40 && sx < PANEL.x + 190 && sy > PANEL.y + PANEL.h - 52 && sy < PANEL.y + PANEL.h - 24) {
+    respecStats();
+  }
+}
+function respecStats() {
+  const base = classById(player.classId).stats;
+  const spent = (player.stats.str - base.str) + (player.stats.dex - base.dex) + (player.stats.int - base.int) + (player.stats.vit - base.vit);
+  if (spent <= 0) { say('sys', '되돌릴 스탯이 없다', 2); return; }
+  player.statPoints += spent;
+  player.stats = { ...base };
+  applyDerived();
+  AudioSys.sfx.pass();
+  say('sys', `리스펙 — 스탯 포인트 ${spent} 회수 (Ctrl+Z Time Rewind)`, 3);
+  saveGame();
+}
+function drawCharPanel() {
+  const c = classById(player.classId);
+  drawPanelFrame(`${player.charName} — ${c.name}`, `Lv.${player.level} · 스탯 포인트 ${player.statPoints} · C키로 닫기`);
+  // 좌: 초상 + 요약
+  const cx = PANEL.x + 40, cy = PANEL.y + 110;
+  ctx.fillStyle = c.color; ctx.font = '40px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(c.icon, cx, cy);
+  ctx.fillStyle = '#c8d2e4'; ctx.font = '12px sans-serif';
+  ctx.fillText(`이름: ${player.charName}`, cx, cy + 34);
+  ctx.fillText(`클래스: ${c.name}`, cx, cy + 52);
+  ctx.fillText(`HP ${player.maxHp} · 마나 ${player.maxMana}`, cx, cy + 70);
+  ctx.fillText(`이속 ${Math.round(player.speed)} · 재생 ${player.manaRegen.toFixed(1)}/s`, cx, cy + 88);
+  ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif';
+  ctx.fillText(c.tag, cx, cy + 112);
+  // 우: 스탯 배분
+  ctx.textAlign = 'left';
+  for (let i = 0; i < STAT_DEFS.length; i++) {
+    const s = STAT_DEFS[i], p = statBtnPos(i), v = player.stats[s.k];
+    ctx.fillStyle = '#ffd88a'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(`${s.name}`, PANEL.x + 220, p.y - 2);
+    ctx.fillStyle = '#e8eefc'; ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(`${v}`, PANEL.x + 265, p.y - 2);
+    // + 버튼
+    const can = player.statPoints > 0;
+    ctx.fillStyle = can ? '#7ee0a3' : '#2a3346';
+    ctx.fillRect(p.x, p.y - 16, 30, 24);
+    ctx.fillStyle = can ? '#0d1017' : '#59616f';
+    ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('+', p.x + 15, p.y + 2);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#8a97b8'; ctx.font = '10.5px sans-serif';
+    ctx.fillText(s.eff, PANEL.x + 350, p.y - 2);
+  }
+  // 리스펙
+  ctx.fillStyle = '#3a2a4a'; ctx.fillRect(PANEL.x + 40, PANEL.y + PANEL.h - 52, 150, 28);
+  ctx.strokeStyle = '#c792ea'; ctx.strokeRect(PANEL.x + 40, PANEL.y + PANEL.h - 52, 150, 28);
+  ctx.fillStyle = '#e0b3ff'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('↺ 리스펙 (스탯 회수)', PANEL.x + 115, PANEL.y + PANEL.h - 34);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif';
+  ctx.fillText('스탯 포인트는 레벨업마다 +3 · + 클릭으로 배분', W / 2, PANEL.y + PANEL.h - 12);
 }
 
 function drawLogPanel() {
@@ -2085,6 +2205,7 @@ function render() {
   else if (game.panel === 'inv') drawInvPanel();
   else if (game.panel === 'log') drawLogPanel();
   else if (game.panel === 'stream') drawStreamPanel();
+  else if (game.panel === 'char') drawCharPanel();
 
   // 스토리 오버레이
   if (game.story) drawStory();
@@ -2123,8 +2244,10 @@ function saveGame() {
       flags: game.flags || {},
       p: {
         level: player.level, xp: player.xp, xpNext: player.xpNext,
-        baseMaxHp: player.baseMaxHp, maxMana: player.maxMana, baseManaRegen: player.baseManaRegen,
+        baseMaxHp: player.baseMaxHp, baseMaxMana: player.baseMaxMana, baseManaRegen: player.baseManaRegen,
         points: player.points, tree: player.tree, inv: player.inv, equip: player.equip,
+        charName: player.charName, classId: player.classId, tint: player.tint, auraTint: player.auraTint,
+        stats: player.stats, statPoints: player.statPoints,
       },
     }));
     game.savedFlash = 1.4;
@@ -2143,8 +2266,11 @@ function applySave(s) {
   player = newPlayer();
   Object.assign(player, {
     level: s.p.level, xp: s.p.xp, xpNext: s.p.xpNext,
-    baseMaxHp: s.p.baseMaxHp, maxMana: s.p.maxMana, baseManaRegen: s.p.baseManaRegen,
+    baseMaxHp: s.p.baseMaxHp, baseMaxMana: s.p.baseMaxMana || 100, baseManaRegen: s.p.baseManaRegen,
     points: s.p.points, tree: s.p.tree || {}, inv: s.p.inv || [], equip: s.p.equip || {},
+    charName: s.p.charName || '덕산', classId: s.p.classId || 'necro',
+    tint: s.p.tint || '#f5f5f0', auraTint: s.p.auraTint || '#c792ea',
+    stats: s.p.stats || { str: 5, dex: 5, int: 5, vit: 5 }, statPoints: s.p.statPoints || 0,
   });
   resetGame(s.act || 1);     // act 진실값 → player·flags·kills·coins 보존하며 월드 재생성
   applyDerived();
@@ -2176,14 +2302,49 @@ document.getElementById('resumeBtn').addEventListener('click', () => {
   setBanner(`이어하기 — Lv.${player.level}`, `ACT ${game.act} · 커밋토큰 ${game.coins} — 기억이 이어졌다`);
   say('ducksan', '어디까지 했더라. 그래, 판교. 이어서 간다.');
 });
+// ---------- 캐릭터 생성 (A) ----------
+let createSel = 'necro';
+(function initCreate() {
+  const cc = document.getElementById('classCards');
+  if (!cc) return;
+  for (const c of CLASSES) {
+    const el = document.createElement('div');
+    el.className = 'classCard' + (c.id === createSel ? ' sel' : '');
+    el.dataset.id = c.id;
+    el.innerHTML = `<div class="ci">${c.icon}</div><div class="cn" style="color:${c.color}">${c.name}</div>`
+      + `<div class="cd">${c.desc}</div><div class="cs">STR ${c.stats.str} · DEX ${c.stats.dex} · INT ${c.stats.int} · VIT ${c.stats.vit}</div>`
+      + `<div class="ct">${c.tag}</div>`;
+    el.addEventListener('click', () => {
+      createSel = c.id;
+      [...cc.children].forEach((ch) => ch.classList.toggle('sel', ch.dataset.id === c.id));
+      document.getElementById('tintInput').value = c.tint;
+      document.getElementById('auraInput').value = c.auraTint;
+    });
+    cc.appendChild(el);
+  }
+})();
+function beginNewCharacter() {
+  AudioSys.init();
+  clearSave();
+  player = null; game.coins = 0;
+  resetGame();                 // 기본 player + 월드 생성 (player 재생성 포함)
+  const c = classById(createSel);
+  const nm = (document.getElementById('charNameInput').value || '덕산').slice(0, 8).trim() || '덕산';
+  player.charName = nm; player.classId = c.id;   // 생성된 player에 정체성·스탯 덮어쓰기
+  player.stats = { ...c.stats };
+  player.tint = document.getElementById('tintInput').value || c.tint;
+  player.auraTint = document.getElementById('auraInput').value || c.auraTint;
+  applyDerived();
+  player.hp = player.maxHp; player.mana = player.maxMana;
+  document.getElementById('createScreen').classList.add('hidden');
+  startStory();
+}
+document.getElementById('createBtn').addEventListener('click', beginNewCharacter);
+
 document.getElementById('startBtn').addEventListener('click', () => {
   document.getElementById('titleScreen').classList.add('hidden');
-  AudioSys.init();
-  clearSave();          // '새로 시작' = 옛 기억을 지운다
-  player = null;
-  game.coins = 0;
-  resetGame();
-  startStory(); // 오프닝 내레이션 → 클릭으로 넘기면 게임 시작
+  clearSave();
+  document.getElementById('createScreen').classList.remove('hidden'); // 캐릭터 생성으로
 });
 document.getElementById('retryBtn').addEventListener('click', () => {
   document.getElementById('gameOverScreen').classList.add('hidden');

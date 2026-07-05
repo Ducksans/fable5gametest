@@ -88,6 +88,17 @@
           <button id="startBtn">판교역 3번 출구로 강림</button>
           <p class="saveNote">진행(레벨·스킬·아이템)은 자동 저장됩니다 — 새로고침해도 이어집니다.</p>
         </div>
+        <div id="createScreen" class="hidden">
+          <h1 class="createTitle">소환사 강림</h1>
+          <p class="createSub">클래스를 고르고, 이름을 짓고, 코스튬을 입혀라</p>
+          <div id="classCards"></div>
+          <div class="createRow">
+            <label>이름 <input id="charNameInput" maxlength="8" value="덕산" autocomplete="off"></label>
+            <label>셔츠 <input type="color" id="tintInput" value="#f5f5f0"></label>
+            <label>오라 <input type="color" id="auraInput" value="#c792ea"></label>
+          </div>
+          <button id="createBtn">판교역 3번 출구로 강림</button>
+        </div>
         <div id="gameOverScreen" class="hidden">
           <h1 id="goTitle">YOU DIED</h1>
           <p id="goDesc">덕산은 다시 부동산으로 돌아갔다...</p>
