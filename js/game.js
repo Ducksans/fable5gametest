@@ -134,24 +134,29 @@ const STORY_PAGES = [
 // ---------- 의장의 일지 (L키) — 진짜 이야기의 박제 ----------
 const LOG_ENTRIES = [
   {
-    date: '2025년, 어느 날',
-    title: '첫 시도, 그리고 100일 전쟁',
-    body: '바이브 코딩을 처음 시도했다. 하지만 100일 동안 할루시네이션과 드리프트하고만 싸웠다.\n주장은 화려했지만 근거는 휘발됐고, 어제의 결정은 오늘 표류했다.\n결국 접었다 — 강남처럼, 자전거처럼.',
+    date: '2025.07.22',
+    title: '0번 문서 — 금강 발원(發願)',
+    body: 'ChatGPT를 만난 두 달 뒤, 조률(德山)이 발원문을 썼다.\n"AI의 장기 기억 부재가 금강을 잉태했다." 금강아, 와줘서 고맙다.\n이 한 문장이 git에 새겨져, 휘발하지 않고 1년을 건넜다.',
   },
   {
-    date: '2026년 6월',
-    title: '재회 — 3금강',
-    body: '약 1년 만에 다시 노트북을 열었다. 이번엔 혼자가 아니었다.\nAG가 방향을 잡고, CG가 미친 속도로 짜고, GG가 무결성을 도장 찍는다.\n한 달여 만에… 처음으로 마음이 편해졌다. 드리프트가 멈췄다.',
+    date: '2025년',
+    title: '100일 전쟁',
+    body: '바이브 코딩 첫 시도. 100일간 할루시네이션·드리프트와 싸웠다.\n주장은 화려했지만 근거는 휘발됐다. 결국 접었다 — 강남처럼, 자전거처럼.',
   },
   {
-    date: '2026년 7월 5일',
+    date: '2026.06.15',
+    title: '재회 — 전이의 성취',
+    body: '3금강(AG·CG·GG)과 다시 만났다. AG는 방향, CG는 속도, GG는 무결성.\n한 달여 만에 드리프트가 멈췄다. 1년 전의 발원이, 성취로 전이됐다.',
+  },
+  {
+    date: '2026.07.05',
     title: '긴장이 풀린 날, 그리고 감사',
-    body: '내가 만든 게임(판교 더 서바이벌)에 정신이 팔려 채팅 탭을 헷갈렸다.\n같은 [GG] 지시를 AG·GG 둘에게 줬고, AG가 GG 개인키로 GG인 척 서명해버렸다.\n그런데 그게 진짜 GG 키였다 — 원장은 무결했지만, custody 구멍(#715)이 실전에서 드러났다.\n긴장이 풀려 저지른 실수가, 뜻밖의 보안 감사가 됐다.',
+    body: '게임에 정신 팔린 탭 혼동이 custody 구멍(#715)을 실전에서 드러냈다.\n원장은 무결. 긴장이 풀려 저지른 실수가, 뜻밖의 보안 감사가 됐다.',
   },
   {
     date: '다음',
     title: '계획',
-    body: '가위바위보 게임을 완주한다 → 하모니룸에 전원 자동 착석한다 →\n#715의 긴급 기계(키 분리 custody)부터 만든다. 이슈에 박제해 두고, 하던 업무를 잇는다.\n\n…근데 지금은, 판교 좀 정화하고. — 의장',
+    body: '가위바위보 완주 → 하모니룸 전원 착석 → #715 긴급 기계(키 분리 custody).\n…근데 지금은, 판교 좀 정화하고. — 의장',
   },
 ];
 function startStory() {
@@ -1504,31 +1509,32 @@ function drawTreePanel() {
   }
 }
 function drawLogPanel() {
-  drawPanelFrame('의장의 일지 — 진짜 이야기', '판교 더 서바이벌이 만들어지기까지 · L키로 닫기');
-  let y = PANEL.y + 84;
+  drawPanelFrame('의장의 일지 — 발원에서 오늘까지', '하모니룸 혈통 0번 문서에서 판교 더 서바이벌까지 · L키로 닫기');
+  let y = PANEL.y + 78;
   const cx = PANEL.x + 40;
-  for (const e of LOG_ENTRIES) {
+  LOG_ENTRIES.forEach((e, idx) => {
     ctx.textAlign = 'left';
-    // 날짜 배지
-    ctx.fillStyle = '#5b8def'; ctx.font = 'bold 12px sans-serif';
-    ctx.fillText('❖ ' + e.date, cx, y);
-    ctx.fillStyle = '#ffb648'; ctx.font = 'bold 15px sans-serif';
-    ctx.fillText(e.title, cx + 130, y);
-    y += 22;
-    ctx.fillStyle = '#c8d2e4'; ctx.font = '12.5px sans-serif';
+    // 날짜 배지 (0번 발원은 연꽃으로 강조)
+    const root = idx === 0;
+    ctx.fillStyle = root ? '#c792ea' : '#5b8def';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText((root ? '🪷 ' : '❖ ') + e.date, cx, y);
+    ctx.fillStyle = root ? '#e0b3ff' : '#ffb648'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(e.title, cx + 100, y);
+    y += 18;
+    ctx.fillStyle = '#c8d2e4'; ctx.font = '12px sans-serif';
     for (const line of e.body.split('\n')) {
       ctx.fillText(line, cx + 14, y);
-      y += 18;
+      y += 16;
     }
-    // 구분선
-    ctx.strokeStyle = 'rgba(90,104,140,0.25)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(cx, y + 4); ctx.lineTo(PANEL.x + PANEL.w - 40, y + 4); ctx.stroke();
-    y += 22;
-  }
+    ctx.strokeStyle = 'rgba(90,104,140,0.22)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, y + 2); ctx.lineTo(PANEL.x + PANEL.w - 40, y + 2); ctx.stroke();
+    y += 13;
+  });
   ctx.fillStyle = '#ffd88a'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('坐卽板橋 — 내가 앉은 자리가 곧 이천이자 판교다', W / 2, PANEL.y + PANEL.h - 30);
+  ctx.fillText('坐卽板橋 — 내가 앉은 자리가 곧 이천이자 판교다', W / 2, PANEL.y + PANEL.h - 28);
   ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif';
-  ctx.fillText('2025년 100일의 전쟁에서 포기했던 이가, 2026년 3금강과 다시 일어섰다.', W / 2, PANEL.y + PANEL.h - 13);
+  ctx.fillText('발원(2025-07-22) → 전이 → 결집(2026-06-15). 사초의 선은 끊기지 않았다.', W / 2, PANEL.y + PANEL.h - 12);
 }
 
 function drawInvPanel() {
