@@ -89,6 +89,8 @@ const AudioSys = (() => {
   }
 
   function toggleBgm() { bgmOn = !bgmOn; return bgmOn; }
+  let vol = 0.5;
+  function setVolume(v) { vol = Math.max(0, Math.min(1, v)); if (master) master.gain.value = vol; return vol; }
 
-  return { init, sfx, toggleBgm, get on() { return bgmOn; } };
+  return { init, sfx, toggleBgm, setVolume, get on() { return bgmOn; }, get volume() { return vol; } };
 })();
