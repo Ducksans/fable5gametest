@@ -376,6 +376,7 @@ function allocNode(n) {
   AudioSys.sfx.levelup();
   say('sys', `[${n.name}] Lv.${r + 1} 습득`, 3);
   applyDerived();
+  saveGame();
 }
 function equipItem(idx) {
   const it = player.inv[idx];
@@ -386,6 +387,7 @@ function equipItem(idx) {
   if (prev) player.inv.push(prev);
   AudioSys.sfx.click();
   applyDerived();
+  saveGame();
 }
 function unequipItem(slot) {
   const it = player.equip[slot];
@@ -395,6 +397,7 @@ function unequipItem(slot) {
   player.inv.push(it);
   AudioSys.sfx.click();
   applyDerived();
+  saveGame();
 }
 function pickupItem(g) {
   if (player.inv.length >= 24) {
@@ -408,6 +411,7 @@ function pickupItem(g) {
     else AudioSys.sfx.pickup();
   }
   g.got = true;
+  saveGame();
 }
 
 function summon(type) {
@@ -741,6 +745,7 @@ function damageEnemy(e, dmg, color, opts) {
 
 function gainXp(v) {
   player.xp += v;
+  const lv0 = player.level;
   while (player.xp >= player.xpNext) {
     player.xp -= player.xpNext;
     player.level++;
@@ -755,6 +760,7 @@ function gainXp(v) {
     once('treeHint', () => say('sys', 'T키: 스킬트리 (소환계·레거시 시학·야인의 근성) · I키: 가방/장비', 6));
     for (const s of summons) { s.dmg *= 1.08; s.maxHp *= 1.08; s.hp = s.maxHp; }
   }
+  if (player.level > lv0) saveGame(); // 레벨업 = 진행 저장
 }
 
 // ---------- 이펙트 ----------
@@ -767,6 +773,10 @@ function update(dt) {
   game.time += dt;
   game.shake = Math.max(0, game.shake - dt * 30);
   minionBatchCd = Math.max(0, minionBatchCd - dt);
+  // 주기 오토세이브 (10초) + 저장 표시 페이드
+  game.saveTimer = (game.saveTimer || 0) - dt;
+  if (game.saveTimer <= 0) { game.saveTimer = 10; saveGame(); }
+  if (game.savedFlash > 0) game.savedFlash -= dt;
 
   // ACT 클리어 → 다음 ACT
   if (game.bossDown) {
@@ -775,6 +785,7 @@ function update(dt) {
       const act = game.act + 1;
       resetGame(act);
       game.running = true;
+      saveGame(); // ACT 돌파 = 진행 저장
       setBanner(`ACT ${act} — 판교는 넓다`, '난이도 상승 · 레벨과 커밋토큰은 유지된다');
       say('sys', `ACT ${act}: 더 깊은 판교. 버그들이 강해졌다.`);
       say('ducksan', act === 2 ? '한 블록 접수했다. 다음은 현대백화점 방면이다.' : '판교는 넓다. 계속 간다.');
@@ -1535,6 +1546,15 @@ function drawHud() {
     ctx.restore();
   }
 
+  // 저장 표시 (자동 저장 순간 페이드)
+  if (game.savedFlash > 0) {
+    ctx.save();
+    ctx.globalAlpha = clamp(game.savedFlash, 0, 1);
+    ctx.fillStyle = '#7ee0a3'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('💾 저장됨', W / 2, 122);
+    ctx.restore();
+  }
+
   // 스킬바 (하단 중앙)
   const SZ = 46, GAP = 6, N = 6;
   const bx = W / 2 - (SZ * N + GAP * (N - 1)) / 2, by = H - SZ - 24;
@@ -2088,9 +2108,78 @@ function loop(ts) {
 resetGame();
 requestAnimationFrame(loop);
 
+/* ============================================================
+   저장·리줌 — 게임에도 기억을 (발원문 §1: 기억 부재가 금강을 잉태)
+   진행(레벨·XP·스킬트리·아이템·ACT·커밋토큰)을 localStorage에 박제.
+   새로고침·탭 닫기에도 이어진다. 라이브 런(적/위치)은 재생성.
+   ============================================================ */
+const SAVE_KEY = 'pangyo-survival-save-v1';
+function saveGame() {
+  if (!player || !game.running) return;
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 1, ts: Date.now(),
+      act: game.act, coins: game.coins, kills: game.kills, comboMax: game.comboMax || 0,
+      flags: game.flags || {},
+      p: {
+        level: player.level, xp: player.xp, xpNext: player.xpNext,
+        baseMaxHp: player.baseMaxHp, maxMana: player.maxMana, baseManaRegen: player.baseManaRegen,
+        points: player.points, tree: player.tree, inv: player.inv, equip: player.equip,
+      },
+    }));
+    game.savedFlash = 1.4;
+  } catch (e) { /* localStorage 불가 시 조용히 무시 (P7 정직: 저장 안 됨) */ }
+}
+function loadSave() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    return (s && s.v === 1 && s.p) ? s : null;
+  } catch (e) { return null; }
+}
+function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { } }
+function applySave(s) {
+  game.flags = s.flags || {};
+  game.coins = s.coins || 0; game.kills = s.kills || 0; game.comboMax = s.comboMax || 0;
+  player = newPlayer();
+  Object.assign(player, {
+    level: s.p.level, xp: s.p.xp, xpNext: s.p.xpNext,
+    baseMaxHp: s.p.baseMaxHp, maxMana: s.p.maxMana, baseManaRegen: s.p.baseManaRegen,
+    points: s.p.points, tree: s.p.tree || {}, inv: s.p.inv || [], equip: s.p.equip || {},
+  });
+  resetGame(s.act || 1);     // act 진실값 → player·flags·kills·coins 보존하며 월드 재생성
+  applyDerived();
+  player.hp = player.maxHp; player.mana = player.maxMana;
+  game.running = true;
+}
+// 새로고침·탭 닫기·숨김 시 즉시 저장 (P3: 흘림 0)
+window.addEventListener('beforeunload', saveGame);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveGame(); });
+
+// 타이틀에 저장이 있으면 '이어하기' 노출
+(function initTitleSave() {
+  const s = loadSave();
+  const rb = document.getElementById('resumeBtn');
+  const sb2 = document.getElementById('startBtn');
+  if (s && rb) {
+    rb.textContent = `▶ 이어하기 — Lv.${s.p.level} · ACT ${s.act}`;
+    rb.classList.remove('hidden');
+    if (sb2) sb2.textContent = '새로 시작 (저장 삭제)';
+  }
+})();
+
+document.getElementById('resumeBtn').addEventListener('click', () => {
+  const s = loadSave();
+  if (!s) return;
+  document.getElementById('titleScreen').classList.add('hidden');
+  AudioSys.init();
+  applySave(s);
+  setBanner(`이어하기 — Lv.${player.level}`, `ACT ${game.act} · 커밋토큰 ${game.coins} — 기억이 이어졌다`);
+  say('ducksan', '어디까지 했더라. 그래, 판교. 이어서 간다.');
+});
 document.getElementById('startBtn').addEventListener('click', () => {
   document.getElementById('titleScreen').classList.add('hidden');
   AudioSys.init();
+  clearSave();          // '새로 시작' = 옛 기억을 지운다
   player = null;
   game.coins = 0;
   resetGame();
@@ -2099,12 +2188,15 @@ document.getElementById('startBtn').addEventListener('click', () => {
 document.getElementById('retryBtn').addEventListener('click', () => {
   document.getElementById('gameOverScreen').classList.add('hidden');
   AudioSys.init();
-  player = null;
-  game.coins = 0;
-  resetGame();
-  game.running = true;
-  setBanner('재강림', '"이번엔 안 죽는다" — 덕산');
-  say('ducksan', '부동산은 무슨. 판교를 접수하기 전엔 못 돌아간다.');
+  const s = loadSave();
+  if (s) {              // 죽어도 기억(빌드)은 남는다 — 현재 ACT에서 재강림
+    applySave(s);
+    setBanner('재강림', `Lv.${player.level} · 기억은 남아있다`);
+    say('ducksan', '부동산은 무슨. 판교를 접수하기 전엔 못 돌아간다.');
+  } else {
+    player = null; game.coins = 0; resetGame(); game.running = true;
+    setBanner('재강림', '"이번엔 안 죽는다" — 덕산');
+  }
 });
 
 /* ============================================================
