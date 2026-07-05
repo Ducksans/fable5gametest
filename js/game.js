@@ -110,6 +110,7 @@ let minionBatchCd = 0;
 let dialogues = []; // {speaker, color, text, t, life}
 let groundItems = []; // 바닥 드랍템 {x, y, item}
 let zones = [];       // 타건 장판 {x, y, t, dur, dps}
+let hazards = [];     // 적대 장판(밤의 여왕 널 참조) {x, y, t, dur, r, tick}
 
 // ---------- 세션 실황 (K키) — 이 채팅이 게임으로 흘러든다 ----------
 let streamData = null;   // GitHub에서 불러온 최신 스트림
@@ -216,8 +217,9 @@ function resetGame(act) {
     ultGauge: 0, banner: null, shake: 0,
     focusTarget: null, bossDown: false, actClearT: 0,
     flags: act ? game.flags : {}, story: null, panel: null,
+    combo: 0, comboT: 0, comboMax: act ? (game.comboMax || 0) : 0, hitstop: 0,
   });
-  dialogues = []; groundItems = []; zones = [];
+  dialogues = []; groundItems = []; zones = []; hazards = [];
   if (!player || !act) player = newPlayer();
   player.x = 320; player.y = 320; player.moveTarget = null;
   summons = []; enemies = []; projectiles = [];
@@ -567,6 +569,77 @@ function spawnEnemyAt(type, x, y, mult) {
     atkTimer: 0, orbitA: rand(0, Math.PI * 2), breakHits: 0,
     aggro: false, slamT: 5,
   });
+  return enemies[enemies.length - 1];
+}
+
+// ---------- 보스 로스터 (ACT마다 로테이션 · 로어 20~22) ----------
+const BOSSES = [
+  { kind: 'golem', name: '레거시 코드 골렘', color: '#b8860b', label: 'LEGACY', hp: 1400, dmg: 24, r: 36, xp: 200, coin: 60,
+    meet: [['legacy', '이 코드... 누가 짰지?'], ['ducksan', '...7년 전의 나다. 미안하다. 그리고 오늘, 리팩토링하러 왔다.']],
+    clear: [['legacy', '결국... 리팩토링 당했군... 후련하다...'], ['ducksan', '고생했다. 7년 묵은 빚, 오늘 갚았다.']] },
+  { kind: 'hydra', name: '무한루프 히드라', color: '#2fa8d8', label: 'while(1)', hp: 1750, dmg: 18, r: 34, xp: 260, coin: 80,
+    meet: [['gg', '무한루프 히드라입니다. 잘라도 새끼 루프가 돋아나요 — 몸통(조건)을 끊어야 멈춥니다.'], ['ducksan', '끝이 없네. 계속 나온다.']],
+    clear: [['ducksan', '드디어 break. 이 무한루프, 오늘로 종료다.']] },
+  { kind: 'queen', name: 'Null Pointer 밤의 여왕', color: '#a86ad0', label: 'null♛', hp: 2050, dmg: 20, r: 32, xp: 320, coin: 100,
+    meet: [['ducksan', '참조가 안 잡혀. 어디서 튀어나올 줄 모르겠다 — 정신 바짝.'], ['gg', '그림자 사이로 순간이동합니다. 발밑 널 장판을 밟지 마세요.']],
+    clear: [['ducksan', '밤의 여왕도 결국 초기화됐다. null이 defined가 됐군.']] },
+];
+function spawnBoss(b, x, y, mult) {
+  enemies.push({
+    type: 'boss', boss: true, bossKind: b.kind, name: b.name, color: b.color, label: b.label,
+    r: b.r, dmg: b.dmg * (0.8 + mult * 0.2), speed: 52, xp: b.xp, coin: b.coin,
+    x, y, homeX: x, homeY: y, hp: b.hp * mult, maxHp: b.hp * mult,
+    atkTimer: 0, orbitA: 0, breakHits: 0, aggro: false,
+    slamT: 5, spawnT: 4, tpT: 5, def: b,
+  });
+}
+// 반환 'dead'면 플레이어 사망
+function bossAI(e, dt) {
+  if (e.bossKind === 'golem') {           // 하드코딩 스탬프 (광역 슬램)
+    e.slamT -= dt;
+    if (e.slamT <= 0) {
+      e.slamT = 6;
+      spawnRing(e.x, e.y, '#ff5b5b'); game.shake = 10; AudioSys.sfx.slam();
+      addText(e.x, e.y - e.r - 20, '하드코딩 스탬프!!', '#ff5b5b', 1.0);
+      for (const t of [player, ...summons]) {
+        if (dist2(e, t) < 170 * 170) {
+          if (t === player) { if (player.invuln <= 0) { player.hp -= 25; player.invuln = 0.4; } }
+          else t.hp -= 40;
+        }
+      }
+      if (player.hp <= 0) return 'dead';
+    }
+  } else if (e.bossKind === 'hydra') {     // 루프 분열 (새끼 소환)
+    e.spawnT -= dt;
+    if (e.spawnT <= 0) {
+      e.spawnT = 4.5;
+      const adds = enemies.filter(x => x.loopSpawn && !x.dead).length;
+      if (adds < 8) {
+        for (let i = 0; i < 2; i++) {
+          const a = rand(0, Math.PI * 2);
+          const s = spawnEnemyAt('race', e.x + Math.cos(a) * 40, e.y + Math.sin(a) * 40, 1);
+          s.loopSpawn = true; s.aggro = true; s.hp = s.maxHp = s.maxHp * 0.6;
+        }
+        spawnRing(e.x, e.y, '#2fa8d8');
+        addText(e.x, e.y - e.r - 18, '루프 분열! for(;;)', '#5bc8f7', 1.0);
+        AudioSys.sfx.summon();
+      }
+    }
+  } else if (e.bossKind === 'queen') {     // 순간이동 + 널 장판 + 슬라임 소환
+    e.tpT -= dt;
+    if (e.tpT <= 0) {
+      e.tpT = 5;
+      const a = rand(0, Math.PI * 2);
+      e.x = clamp(player.x + Math.cos(a) * 170, 40, WORLD - 40);
+      e.y = clamp(player.y + Math.sin(a) * 170, 40, WORLD - 40);
+      spawnRing(e.x, e.y, '#c792ea');
+      hazards.push({ x: player.x, y: player.y, t: 0, dur: 4.5, r: 82, tick: 0 });
+      addText(e.x, e.y - e.r - 18, '널 참조! NullRef', '#c792ea', 1.0);
+      if (Math.random() < 0.6) { const s = spawnEnemyAt('nullptr', e.x + rand(-30, 30), e.y + rand(-30, 30), 1); s.aggro = true; }
+      AudioSys.sfx.summon();
+    }
+  }
+  return null;
 }
 
 // ---------- 월드 생성 (판교역 3번 출구 → 넥슨 사옥 방향) ----------
@@ -592,8 +665,9 @@ function buildWorld() {
     }
     if (tier > 0.45 && Math.random() < 0.5) spawnEnemyAt('elite', px, py, mult);
   }
-  // 보스 아레나 (넥슨 사옥 방향 끝)
-  spawnEnemyAt('boss', 1900, 1900, mult);
+  // 보스 아레나 (넥슨 사옥 방향 끝) — ACT마다 다른 보스
+  const bdef = BOSSES[(game.act - 1) % BOSSES.length];
+  spawnBoss(bdef, 1900, 1900, mult);
   for (let i = 0; i < 5; i++) spawnEnemyAt('nullptr', 1900 + rand(-140, 140), 1900 + rand(-140, 140), mult);
   // 장식: 가로등/화분 (아이소 기둥)
   for (let i = 0; i < 26; i++) decos.push({ x: rand(150, WORLD - 150), y: rand(150, WORLD - 150), h: rand(28, 60) });
@@ -614,13 +688,33 @@ function damageEnemy(e, dmg, color, opts) {
     if (e.breakHits < 3) return;
     dmg = e.hp;
   }
+  // 크리티컬 히트 (juice)
+  let crit = false;
+  if (!opts.force && !e.wisp && Math.random() < 0.12) { dmg *= 1.7; crit = true; game.shake = Math.max(game.shake, 4); }
   e.hp -= dmg;
   AudioSys.sfx.hit();
-  if (!e.wisp) addText(e.x, e.y - e.r - 6, Math.floor(dmg), color || '#fff', 0.6);
+  if (!e.wisp) {
+    if (crit) addText(e.x, e.y - e.r - 8, Math.floor(dmg) + '!', '#ffd54a', 0.85, true);
+    else addText(e.x, e.y - e.r - 6, Math.floor(dmg), color || '#fff', 0.6);
+  }
   if (e.hp <= 0 && !e.dead) {
     e.dead = true;
     game.kills++;
     AudioSys.sfx.kill();
+    // 킬 juice — 히트스톱·콤보·처치 파편
+    game.hitstop = 0.045;
+    game.combo = (game.combo || 0) + 1;
+    game.comboT = 2.6;
+    if (game.combo > (game.comboMax || 0)) game.comboMax = game.combo;
+    for (let i = 0; i < 6; i++) {
+      const a = rand(0, Math.PI * 2), sp = rand(40, 130);
+      particles.push({ x: e.x, y: e.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, z: 6, vz: rand(40, 130), life: rand(0.3, 0.6), t: 0, kind: 'keycap', ch: '×', color: e.color });
+    }
+    if (game.combo % 10 === 0) {
+      setBanner(`${game.combo} COMBO!`, '연속 처치 — 아메리카노 보너스 +20');
+      player.mana = Math.min(player.maxMana, player.mana + 20);
+      AudioSys.sfx.levelup();
+    }
     game.ultGauge = Math.min(100, game.ultGauge + (e.boss ? 40 : e.elite ? 12 : 5) * (1 + getStat('ultGain')));
     corpses.push({ x: e.x, y: e.y, t: 0, boss: !!e.boss });
     const drops = e.boss ? 10 : e.elite ? 4 : 2;
@@ -635,11 +729,12 @@ function damageEnemy(e, dmg, color, opts) {
     if (e.boss) {
       game.bossDown = true;
       game.actClearT = 5;
-      setBanner(`ACT ${game.act} CLEAR!`, '"결국... 리팩토링 당했군..." — 레거시 코드 골렘');
+      setBanner(`ACT ${game.act} CLEAR!`, `${e.name} 격파!`);
       game.shake = 14;
       AudioSys.sfx.levelup();
-      say('legacy', '결국... 리팩토링 당했군... 후련하다...');
-      say('ducksan', '고생했다. 7년 묵은 빚, 오늘 갚았다.');
+      (e.def && e.def.clear || []).forEach(([w, t]) => say(w, t));
+      // 히드라 잔당(루프 새끼) 일소
+      for (const x of enemies) if (x.loopSpawn && !x.dead) { x.dead = true; }
     }
   }
 }
@@ -663,7 +758,7 @@ function gainXp(v) {
 }
 
 // ---------- 이펙트 ----------
-function addText(x, y, str, color, life) { texts.push({ x, y, str, color: color || '#fff', t: 0, life: life || 1.2 }); }
+function addText(x, y, str, color, life, big) { texts.push({ x, y, str, color: color || '#fff', t: 0, life: life || 1.2, big: !!big }); }
 function setBanner(text, sub) { game.banner = { text, sub, t: 0 }; }
 function spawnRing(x, y, color) { particles.push({ x, y, kind: 'ring', t: 0, life: 0.5, color }); }
 
@@ -693,18 +788,20 @@ function update(dt) {
   if (keys['ArrowDown']) { dx += 1; dy += 1; }
   if (keys['ArrowLeft']) { dx -= 1; dy += 1; }
   if (keys['ArrowRight']) { dx += 1; dy -= 1; }
+  const slow = hazards.some(h => dist2(h, player) < h.r * h.r) ? 0.55 : 1; // 널 장판 둔화
+  const spd = player.speed * slow;
   if (dx || dy) {
     player.moveTarget = null;
     const m = Math.hypot(dx, dy);
-    player.x += dx / m * player.speed * dt;
-    player.y += dy / m * player.speed * dt;
+    player.x += dx / m * spd * dt;
+    player.y += dy / m * spd * dt;
   } else if (player.moveTarget) {
     const t = player.moveTarget;
     const d = Math.hypot(t.x - player.x, t.y - player.y);
     if (d < 6) player.moveTarget = null;
     else {
-      player.x += (t.x - player.x) / d * player.speed * dt;
-      player.y += (t.y - player.y) / d * player.speed * dt;
+      player.x += (t.x - player.x) / d * spd * dt;
+      player.y += (t.y - player.y) / d * spd * dt;
     }
   }
   player.x = clamp(player.x, 30, WORLD - 30);
@@ -783,29 +880,13 @@ function update(dt) {
       }
       if (!e.aggro) continue;
     }
-    // 보스 슬램: "하드코딩 스탬프"
+    // 보스 시그니처 패턴 (kind별)
     if (e.boss) {
-      once('bossMet', () => {
+      once('bossMet_' + e.bossKind, () => {
         AudioSys.sfx.bossRoar();
-        say('legacy', '이 코드... 누가 짰지?');
-        say('ducksan', '...7년 전의 나다. 미안하다. 그리고 오늘, 리팩토링하러 왔다.');
+        (e.def && e.def.meet || []).forEach(([w, t]) => say(w, t));
       });
-      e.slamT -= dt;
-      if (e.slamT <= 0) {
-        e.slamT = 6;
-        spawnRing(e.x, e.y, '#ff5b5b');
-        game.shake = 10;
-        AudioSys.sfx.slam();
-        addText(e.x, e.y - e.r - 20, '하드코딩 스탬프!!', '#ff5b5b', 1.0);
-        for (const t of [player, ...summons]) {
-          if (dist2(e, t) < 170 * 170) {
-            if (t === player) {
-              if (player.invuln <= 0) { player.hp -= 25; player.invuln = 0.4; }
-            } else t.hp -= 40;
-          }
-        }
-        if (player.hp <= 0) return gameOver();
-      }
+      if (bossAI(e, dt) === 'dead') return gameOver();
     }
     let target = golem || null;
     if (!target) {
@@ -873,6 +954,19 @@ function update(dt) {
     }
   }
   zones = zones.filter(z => z.t < z.dur);
+
+  // 적대 장판 (밤의 여왕 널 참조) — 밟으면 도트+둔화
+  for (const h of hazards) {
+    h.t += dt;
+    if (dist2(h, player) < h.r * h.r) {
+      h.tick -= dt;
+      if (h.tick <= 0 && player.invuln <= 0) { h.tick = 0.5; player.hp -= 6; addText(player.x, player.y - 24, '-6', '#c792ea'); if (player.hp <= 0) return gameOver(); }
+    }
+  }
+  hazards = hazards.filter(h => h.t < h.dur);
+
+  // 콤보 타이머
+  if (game.comboT > 0) { game.comboT -= dt; if (game.comboT <= 0) game.combo = 0; }
 
   for (const c of corpses) c.t += dt;
   corpses = corpses.filter(c => !c.used && c.t < 25);
@@ -1149,6 +1243,58 @@ function drawBossGolem(s, e) {
   ctx.fillRect(s.x + 5.6 * u, y - 9.5 * u, 2.4 * u, 3.4 * u);
 }
 
+// ---------- 보스: 무한루프 히드라 (석상 + 궤도 루프헤드) ----------
+function drawBossHydra(s, e) {
+  const u = e.r / 5, y = s.y - bobOf(e, 2, 2.5);
+  shadow(s, e.r * 1.1, 0.5);
+  groundGlow(s, e.r * 1.6, '#2fa8d8', 0.22);
+  golemBody(s, y, u, e.color, '#8fe0ff', '#bfefff');
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let k = 0; k < 3; k++) {
+    const a = game.time * 2 + k * 2.09;
+    const hx = s.x + Math.cos(a) * e.r * 1.3, hy = y - e.r * 1.2 + Math.sin(a) * e.r * 0.5;
+    const g = ctx.createRadialGradient(hx, hy, 1, hx, hy, 11);
+    g.addColorStop(0, 'rgba(190,240,255,0.9)'); g.addColorStop(1, 'rgba(47,168,216,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(hx, hy, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(230,250,255,0.95)'; ctx.beginPath(); ctx.arc(hx, hy, 2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- 보스: Null Pointer 밤의 여왕 (왕관 쓴 그림자) ----------
+function drawBossQueen(s, e) {
+  const scl = e.r / 16, y = s.y - bobOf(e, 2.5, 2);
+  shadow(s, e.r, 0.5);
+  groundGlow(s, e.r * 1.6, '#a86ad0', 0.22);
+  // 망토/몸통 (키 큰 그림자)
+  ctx.fillStyle = shade(e.color, -0.4);
+  ctx.beginPath();
+  ctx.moveTo(s.x - 11 * scl, s.y);
+  ctx.lineTo(s.x - 7 * scl, y - 30 * scl);
+  ctx.lineTo(s.x + 7 * scl, y - 30 * scl);
+  ctx.lineTo(s.x + 11 * scl, s.y);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba('#c792ea', 0.5); ctx.lineWidth = 1; ctx.stroke();
+  // 머리
+  const hy = y - 34 * scl;
+  ctx.fillStyle = shade(e.color, -0.05);
+  ctx.beginPath(); ctx.arc(s.x, hy, 5 * scl, 0, Math.PI * 2); ctx.fill();
+  // 왕관
+  ctx.fillStyle = '#ffd54a';
+  for (let k = -1; k <= 1; k++) {
+    ctx.beginPath();
+    ctx.moveTo(s.x + k * 4 * scl - 2, hy - 4.5 * scl);
+    ctx.lineTo(s.x + k * 4 * scl, hy - 10 * scl);
+    ctx.lineTo(s.x + k * 4 * scl + 2, hy - 4.5 * scl);
+    ctx.closePath(); ctx.fill();
+  }
+  // 눈
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = '#ff6bd0';
+  ctx.beginPath(); ctx.arc(s.x - 2 * scl, hy, 1.5 * scl, 0, Math.PI * 2); ctx.arc(s.x + 2 * scl, hy, 1.5 * scl, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 // ---------- 덕산 (네크로맨서) ----------
 function drawDucksan(s) {
   const bob = bobOf(player, 5, 1.6);
@@ -1205,7 +1351,9 @@ function drawUnit(e, label, lift) {
   } else if (t === 'golem') {
     drawGolem(s, e, e.phantom);
   } else if (t === 'boss') {
-    drawBossGolem(s, e);
+    if (e.bossKind === 'hydra') drawBossHydra(s, e);
+    else if (e.bossKind === 'queen') drawBossQueen(s, e);
+    else drawBossGolem(s, e);
   } else if (t === 'elite') {
     drawGolem(s, e, false); // 정령도 돌형
     ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
@@ -1364,11 +1512,27 @@ function drawHud() {
   // 보스 HP 바 (상단 중앙)
   const boss = enemies.find(e => e.boss && e.aggro);
   if (boss) {
-    drawBar(W / 2 - 220, 36, 440, 12, boss.hp / boss.maxHp, '#b8860b');
+    drawBar(W / 2 - 220, 36, 440, 12, boss.hp / boss.maxHp, boss.color || '#b8860b');
     ctx.strokeStyle = '#3a4560'; ctx.strokeRect(W / 2 - 220, 36, 440, 12);
     ctx.fillStyle = '#ffd88a';
     ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('레거시 코드 골렘', W / 2, 62);
+    ctx.fillText(boss.name || '보스', W / 2, 62);
+  }
+
+  // 킬 콤보 (juice)
+  if (game.combo > 1) {
+    const pop = 1 + clamp(1 - (2.6 - game.comboT) / 0.25, 0, 1) * 0.4;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.font = `bold ${Math.round(26 * pop)}px sans-serif`;
+    ctx.fillText(`${game.combo} COMBO`, W / 2 + 1, 96 + 1);
+    ctx.fillStyle = game.combo >= 10 ? '#ffd54a' : '#ff9c6b';
+    ctx.fillText(`${game.combo} COMBO`, W / 2, 96);
+    // 콤보 잔여 게이지
+    ctx.fillStyle = 'rgba(255,213,74,0.6)';
+    ctx.fillRect(W / 2 - 40, 104, 80 * clamp(game.comboT / 2.6, 0, 1), 3);
+    ctx.restore();
   }
 
   // 스킬바 (하단 중앙)
@@ -1701,6 +1865,17 @@ function render() {
     ctx.beginPath(); ctx.ellipse(s.x, s.y, 82, 41, 0, 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = 1;
   }
+  // 널 참조 장판 (밤의 여왕 · 적대)
+  for (const h of hazards) {
+    const s = toScreen(h.x, h.y);
+    const pulse = 0.5 + Math.sin(game.time * 6) * 0.1;
+    ctx.globalAlpha = (0.3 * (1 - h.t / h.dur) + 0.14) * pulse;
+    ctx.fillStyle = '#a86ad0';
+    ctx.beginPath(); ctx.ellipse(s.x, s.y, h.r, h.r * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(199,146,234,0.5)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(s.x, s.y, h.r, h.r * 0.5, 0, 0, Math.PI * 2); ctx.stroke();
+  }
 
   // 시체
   for (const c of corpses) {
@@ -1849,10 +2024,18 @@ function render() {
   for (const t of texts) {
     const s = toScreen(t.x, t.y);
     ctx.globalAlpha = clamp(1 - t.t / t.life, 0, 1);
-    ctx.fillStyle = t.color;
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(t.str, s.x, s.y - 30);
+    if (t.big) {
+      const sc = 1 + clamp(1 - t.t / 0.2, 0, 1) * 0.5; // 튀어오르는 크리
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.font = `bold ${Math.round(18 * sc)}px sans-serif`; ctx.textAlign = 'center';
+      ctx.fillText(t.str, s.x + 1, s.y - 30 + 1);
+      ctx.fillStyle = t.color;
+      ctx.fillText(t.str, s.x, s.y - 30);
+    } else {
+      ctx.fillStyle = t.color;
+      ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(t.str, s.x, s.y - 30);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -1894,7 +2077,8 @@ function loop(ts) {
   const dt = Math.min((ts - last) / 1000, 0.05);
   last = ts;
   if (game.story) game.story.t += dt;
-  if (game.running && !game.panel) update(dt); // 패널 열림 = 일시정지
+  if (game.hitstop > 0) game.hitstop -= dt;      // 히트스톱: 짧은 정지 (타격감)
+  else if (game.running && !game.panel) update(dt); // 패널 열림 = 일시정지
   render();
   requestAnimationFrame(loop);
 }
