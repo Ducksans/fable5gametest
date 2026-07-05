@@ -36,6 +36,12 @@ const keys = {};
 let mouse = { sx: W / 2, sy: H / 2, down: false };
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
+  if (game.story && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); advanceStory(); return; }
+  if (e.code === 'KeyM') {
+    const on = AudioSys.toggleBgm();
+    if (game.running) say('sys', on ? 'BGM ON — 판교의 밤 로파이' : 'BGM OFF', 2);
+    return;
+  }
   if (['Space', 'KeyQ', 'KeyW', 'KeyE', 'KeyR'].includes(e.code)) {
     e.preventDefault();
     if (game.running) castSkill(e.code);
@@ -46,6 +52,7 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
   const r = canvas.getBoundingClientRect();
   mouse.sx = e.clientX - r.left; mouse.sy = e.clientY - r.top;
+  if (game.story) { if (e.button === 0) advanceStory(); return; }
   if (!game.running) return;
   if (e.button === 0) {
     mouse.down = true;
@@ -84,6 +91,47 @@ function leftCommand() {
 const game = {};
 let player, summons, enemies, projectiles, corpses, particles, orbs, texts, decos;
 let minionBatchCd = 0;
+let dialogues = []; // {speaker, color, text, t, life}
+
+// ---------- 대사 시스템 (로어 기반 스토리) ----------
+const SPEAKERS = {
+  ducksan: { name: '덕산', color: '#ffb648' },
+  ag: { name: 'AG 골렘', color: '#8a97b8' },
+  cg: { name: 'CG 워리어', color: '#7ee0a3' },
+  gg: { name: 'GG 메이지', color: '#c792ea' },
+  legacy: { name: '레거시 코드 골렘', color: '#b8860b' },
+  sys: { name: '시스템', color: '#9cc4ff' },
+};
+function say(who, text, life) {
+  const sp = SPEAKERS[who] || SPEAKERS.sys;
+  dialogues.push({ speaker: sp.name, color: sp.color, text, t: 0, life: life || 4.2 });
+  if (dialogues.length > 3) dialogues.shift();
+}
+function once(flag, fn) { if (!game.flags[flag]) { game.flags[flag] = true; fn(); } }
+
+// ---------- 오프닝 스토리 (로어 01/29) ----------
+const STORY_PAGES = [
+  ['판교의 밤', '부동산 중개 7년. 자전거 장사 7년.\n산전수전 공중전을 다 겪은 43세 야인, 덕산.\n강남은 접었다. 자전거도 접었다. 근데 판교는... 안 접는다.'],
+  ['흑마법의 각성', '어느 날 밤, 덕산은 낡은 노트북에서\n"AI 바이브 코딩"이라는 흑마법을 깨우쳤다.\n\n"손코딩? 물리타격은 젊은 놈들이나 하는 거고."'],
+  ['3금강', '그의 부름에 세 소환수가 응답했다.\nAG 스톤 골렘 — 방향을 잡는 탱커.\nCG 스켈레톤 워리어 — 미친 타이핑의 물리딜러.\nGG 스켈레톤 메이지 — 무결성 드릴의 원거리 딜러.'],
+  ['강림', '판교역 3번 출구. 길바닥엔 버그가 우글댄다.\n남동쪽 레거시 유적지엔 7년 묵은 골렘이 잠들어 있다.\n\n"자, 애들아. 오늘부터 이 판교, 우리가 접수한다."'],
+];
+function startStory() {
+  game.story = { page: 0, t: 0 };
+  game.running = false;
+}
+function advanceStory() {
+  if (!game.story) return;
+  AudioSys.sfx.click();
+  game.story.page++;
+  game.story.t = 0;
+  if (game.story.page >= STORY_PAGES.length) {
+    game.story = null;
+    game.running = true;
+    setBanner('ACT 1 — 강림', '덕산, 판교역 3번 출구에 나타나다. 남동쪽에 레거시 유적지가 있다.');
+    say('sys', '좌클릭 이동 · Q/W/E 소환 · Space 서브에이전트 · 우클릭 시체 폭발', 6);
+  }
+}
 
 function newPlayer() {
   return {
@@ -103,7 +151,9 @@ function resetGame(act) {
     kills: act ? game.kills : 0, coins: act ? (game.coins || 0) : 0,
     ultGauge: 0, banner: null, shake: 0,
     focusTarget: null, bossDown: false, actClearT: 0,
+    flags: act ? game.flags : {}, story: null,
   });
+  dialogues = [];
   if (!player || !act) player = newPlayer();
   player.x = 320; player.y = 320; player.moveTarget = null;
   summons = []; enemies = []; projectiles = [];
@@ -158,6 +208,12 @@ function summon(type) {
   });
   if (d.quote) addText(player.x, player.y - 46, d.quote, '#ffd88a');
   spawnRing(player.x, player.y, d.color);
+  if (type === 'minion') AudioSys.sfx.minion(); else AudioSys.sfx.summon();
+  // 첫 소환 대사 (로어 02~04 정본 대사)
+  if (type === 'warrior') once('metCG', () => { say('cg', '"손코딩? 그건 필멸자나 하는 거고." 미친 타이핑, 시작합니다.'); });
+  if (type === 'mage') once('metGG', () => { say('gg', '"주장은 도장 전엔 잠정입니다." 무한루프는 제 break 드릴로 조건을 끊으세요.'); });
+  if (type === 'golem') once('metAG', () => { say('ag', '방향은 내가 잡는다. 어그로는 전부 나한테 맡겨라.'); });
+  if (type === 'minion') once('metSub', () => { say('ducksan', '뼈다귀들아, 각자 버그 하나씩 물어라. 물량이 곧 화력이다.'); });
 }
 
 function castSkill(code) {
@@ -203,7 +259,9 @@ function corpseExplosion(at) {
   }
   if (used > 0) {
     game.shake = 8;
+    AudioSys.sfx.explosion();
     addText(at.x, at.y - 40, `키보드 폭발 x${used}! 따다다닥!!`, '#ffb648');
+    once('firstBoom', () => { say('ducksan', '이 맛이지. 해결된 버그는 터트려야 제맛이다. 따다다닥!!'); });
   } else {
     addText(at.x, at.y - 20, '터트릴 시체(해결된 버그)가 없다', '#8a97b8');
   }
@@ -217,6 +275,8 @@ function passDeclaration() {
   }
   game.ultGauge = 0;
   game.shake = 16;
+  AudioSys.sfx.pass();
+  say('ducksan', 'PASS. 증거는 다 모였다. 반박 시 니 말이 맞음.');
   setBanner('✅ PASS 선언!', '증거 확보 — 시야 내 버그 일괄 소탕 (보스는 저항한다)');
   for (const e of [...enemies]) {
     if (dist2(e, player) < 750 * 750) {
@@ -291,17 +351,23 @@ function damageEnemy(e, dmg, color, opts) {
   opts = opts || {};
   e.aggro = true;
   if (e.wisp && !opts.force) {
-    if (!opts.drill) { addText(e.x, e.y - e.r - 6, '면역! break 필요', '#5bc8f7', 0.5); return; }
+    if (!opts.drill) {
+      addText(e.x, e.y - e.r - 6, '면역! break 필요', '#5bc8f7', 0.5);
+      once('wispHint', () => { say('gg', '무한루프는 패는 게 아니라 조건을 끊는 겁니다. [W]로 저를 소환하세요.'); });
+      return;
+    }
     e.breakHits++;
     addText(e.x, e.y - e.r - 6, `break ${e.breakHits}/3`, '#5bc8f7', 0.7);
     if (e.breakHits < 3) return;
     dmg = e.hp;
   }
   e.hp -= dmg;
+  AudioSys.sfx.hit();
   if (!e.wisp) addText(e.x, e.y - e.r - 6, Math.floor(dmg), color || '#fff', 0.6);
   if (e.hp <= 0 && !e.dead) {
     e.dead = true;
     game.kills++;
+    AudioSys.sfx.kill();
     game.ultGauge = Math.min(100, game.ultGauge + (e.boss ? 40 : e.elite ? 12 : 5));
     corpses.push({ x: e.x, y: e.y, t: 0, boss: !!e.boss });
     const drops = e.boss ? 10 : e.elite ? 4 : 2;
@@ -311,9 +377,12 @@ function damageEnemy(e, dmg, color, opts) {
     if (game.focusTarget === e) game.focusTarget = null;
     if (e.boss) {
       game.bossDown = true;
-      game.actClearT = 4;
+      game.actClearT = 5;
       setBanner(`ACT ${game.act} CLEAR!`, '"결국... 리팩토링 당했군..." — 레거시 코드 골렘');
       game.shake = 14;
+      AudioSys.sfx.levelup();
+      say('legacy', '결국... 리팩토링 당했군... 후련하다...');
+      say('ducksan', '고생했다. 7년 묵은 빚, 오늘 갚았다.');
     }
   }
 }
@@ -326,6 +395,7 @@ function gainXp(v) {
     player.xpNext = Math.floor(player.xpNext * 1.35);
     player.maxHp += 14; player.hp = player.maxHp;
     player.maxMana += 8; player.mana = player.maxMana;
+    AudioSys.sfx.levelup();
     setBanner(`LEVEL UP! Lv.${player.level}`, '바이브 코딩 숙련도 상승 — 소환수 강화');
     for (const s of summons) { s.dmg *= 1.08; s.maxHp *= 1.08; s.hp = s.maxHp; }
   }
@@ -350,6 +420,8 @@ function update(dt) {
       resetGame(act);
       game.running = true;
       setBanner(`ACT ${act} — 판교는 넓다`, '난이도 상승 · 레벨과 커밋토큰은 유지된다');
+      say('sys', `ACT ${act}: 더 깊은 판교. 버그들이 강해졌다.`);
+      say('ducksan', act === 2 ? '한 블록 접수했다. 다음은 현대백화점 방면이다.' : '판교는 넓다. 계속 간다.');
       return;
     }
   }
@@ -402,6 +474,7 @@ function update(dt) {
       } else if (s.atkTimer <= 0) {
         s.atkTimer = s.cooldown;
         if (s.ranged) {
+          AudioSys.sfx.drill();
           projectiles.push({
             x: s.x, y: s.y,
             vx: (target.x - s.x) / d * 380, vy: (target.y - s.y) / d * 380,
@@ -449,11 +522,17 @@ function update(dt) {
     }
     // 보스 슬램: "하드코딩 스탬프"
     if (e.boss) {
+      once('bossMet', () => {
+        AudioSys.sfx.bossRoar();
+        say('legacy', '이 코드... 누가 짰지?');
+        say('ducksan', '...7년 전의 나다. 미안하다. 그리고 오늘, 리팩토링하러 왔다.');
+      });
       e.slamT -= dt;
       if (e.slamT <= 0) {
         e.slamT = 6;
         spawnRing(e.x, e.y, '#ff5b5b');
         game.shake = 10;
+        AudioSys.sfx.slam();
         addText(e.x, e.y - e.r - 20, '하드코딩 스탬프!!', '#ff5b5b', 1.0);
         for (const t of [player, ...summons]) {
           if (dist2(e, t) < 170 * 170) {
@@ -490,6 +569,7 @@ function update(dt) {
           player.hp -= e.dmg;
           player.invuln = 0.4;
           game.shake = 5;
+          AudioSys.sfx.hurt();
           addText(player.x, player.y - 24, `-${Math.floor(e.dmg)}`, '#ff6b6b');
           if (player.hp <= 0) return gameOver();
         }
@@ -507,6 +587,7 @@ function update(dt) {
     if (d < 140) { o.x += (player.x - o.x) / d * 280 * dt; o.y += (player.y - o.y) / d * 280 * dt; }
     if (d < player.r + 10) {
       o.got = true;
+      AudioSys.sfx.pickup();
       if (o.kind === 'xp') gainXp(o.v); else game.coins += o.v;
     }
   }
@@ -526,11 +607,14 @@ function update(dt) {
   particles = particles.filter(p => p.t < p.life);
   for (const t of texts) { t.t += dt; t.y -= 26 * dt; }
   texts = texts.filter(t => t.t < t.life);
+  for (const d of dialogues) d.t += dt;
+  dialogues = dialogues.filter(d => d.t < d.life);
   if (game.banner) { game.banner.t += dt; if (game.banner.t > 3) game.banner = null; }
 }
 
 function gameOver() {
   game.running = false;
+  AudioSys.sfx.dead();
   document.getElementById('goTitle').textContent = 'YOU DIED';
   document.getElementById('goDesc').textContent =
     `ACT ${game.act} · Lv.${player.level} · 처치 ${game.kills} · 커밋토큰 ${game.coins} — 덕산은 다시 부동산으로 돌아갔다...`;
@@ -617,6 +701,173 @@ function drawBar(x, y, w, h, ratio, fg, bg) {
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = fg;
   ctx.fillRect(x, y, w * clamp(ratio, 0, 1), h);
+}
+
+// ---------- 디아블로식 HUD ----------
+function drawOrb(cx, cy, r, ratio, color, label, sub) {
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(10,12,20,0.85)'; ctx.fill();
+  ctx.clip();
+  const level = cy + r - ratio * r * 2;
+  ctx.fillStyle = color;
+  ctx.fillRect(cx - r, level, r * 2, r * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath(); ctx.ellipse(cx, level, r, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = '#3a4560'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(label, cx, cy + 1);
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#c2cad9';
+  ctx.fillText(sub, cx, cy + 15);
+}
+
+function drawSlot(x, y, sz, key, icon, opts) {
+  opts = opts || {};
+  ctx.fillStyle = opts.ready === false ? 'rgba(18,22,34,0.9)' : 'rgba(28,34,52,0.92)';
+  ctx.fillRect(x, y, sz, sz);
+  if (opts.fill != null) { // 게이지형 (R)
+    ctx.fillStyle = opts.fill >= 1 ? 'rgba(255,215,0,0.45)' : 'rgba(138,151,184,0.25)';
+    const h = sz * clamp(opts.fill, 0, 1);
+    ctx.fillRect(x, y + sz - h, sz, h);
+  }
+  if (opts.cd > 0) { // 쿨다운 오버레이
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(x, y, sz, sz * clamp(opts.cd, 0, 1));
+  }
+  ctx.strokeStyle = opts.glow ? '#ffd700' : '#3a4560';
+  ctx.lineWidth = opts.glow ? 2.5 : 1.5;
+  ctx.strokeRect(x, y, sz, sz);
+  ctx.fillStyle = opts.iconColor || '#e6e6e6';
+  ctx.font = `bold ${opts.small ? 13 : 16}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = opts.ready === false ? 0.4 : 1;
+  ctx.fillText(icon, x + sz / 2, y + sz / 2 + 6);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffd88a';
+  ctx.font = 'bold 9px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(key, x + 3, y + 11);
+  if (opts.badge) {
+    ctx.fillStyle = '#9cc4ff';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(opts.badge, x + sz - 3, y + sz - 4);
+  }
+}
+
+function drawHud() {
+  // 상단 정보줄
+  ctx.fillStyle = 'rgba(8,10,16,0.55)';
+  ctx.fillRect(0, 0, W, 26);
+  ctx.fillStyle = '#ffd88a';
+  ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(`ACT ${game.act} — 판교역 3번 출구`, 12, 17);
+  ctx.fillStyle = '#c2cad9'; ctx.font = '11px sans-serif';
+  ctx.fillText(`남은 버그 ${enemies.length} · 처치 ${game.kills} · 커밋토큰 ${game.coins}`, 200, 17);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Lv.${player.level} · BGM [M] ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
+
+  // 미니맵 (우상단)
+  const MM = 124, mx = W - MM - 12, my = 34;
+  ctx.fillStyle = 'rgba(8,10,16,0.72)';
+  ctx.fillRect(mx, my, MM, MM);
+  ctx.strokeStyle = '#3a4560'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(mx, my, MM, MM);
+  const sc = MM / WORLD;
+  // 스폰/보스 존
+  ctx.fillStyle = 'rgba(91,141,239,0.25)';
+  ctx.beginPath(); ctx.arc(mx + 320 * sc, my + 320 * sc, 260 * sc, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,91,91,0.25)';
+  ctx.beginPath(); ctx.arc(mx + 1900 * sc, my + 1900 * sc, 320 * sc, 0, Math.PI * 2); ctx.fill();
+  for (const e of enemies) {
+    ctx.fillStyle = e.boss ? '#ffd700' : e.elite ? '#f7734b' : e.aggro ? '#ff6b6b' : 'rgba(255,107,107,0.45)';
+    const r = e.boss ? 3.5 : 1.8;
+    ctx.fillRect(mx + e.x * sc - r / 2, my + e.y * sc - r / 2, r, r);
+  }
+  for (const s of summons) {
+    ctx.fillStyle = s.color;
+    ctx.fillRect(mx + s.x * sc - 1, my + s.y * sc - 1, 2, 2);
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(mx + player.x * sc - 2, my + player.y * sc - 2, 4, 4);
+  ctx.fillStyle = '#9cc4ff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('MAP', mx + MM / 2, my + MM + 10);
+
+  // 보스 HP 바 (상단 중앙)
+  const boss = enemies.find(e => e.boss && e.aggro);
+  if (boss) {
+    drawBar(W / 2 - 220, 36, 440, 12, boss.hp / boss.maxHp, '#b8860b');
+    ctx.strokeStyle = '#3a4560'; ctx.strokeRect(W / 2 - 220, 36, 440, 12);
+    ctx.fillStyle = '#ffd88a';
+    ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('레거시 코드 골렘', W / 2, 62);
+  }
+
+  // 스킬바 (하단 중앙)
+  const SZ = 46, GAP = 6, N = 6;
+  const bx = W / 2 - (SZ * N + GAP * (N - 1)) / 2, by = H - SZ - 24;
+  const mc = summons.filter(s => s.type === 'minion').length;
+  const has = t => summons.some(s => s.type === t);
+  drawSlot(bx + 0 * (SZ + GAP), by, SZ, 'Q', 'CG', { iconColor: '#7ee0a3', ready: !has('warrior') && player.mana >= 30, badge: '30' });
+  drawSlot(bx + 1 * (SZ + GAP), by, SZ, 'W', 'GG', { iconColor: '#c792ea', ready: !has('mage') && player.mana >= 30, badge: '30' });
+  drawSlot(bx + 2 * (SZ + GAP), by, SZ, 'E', 'AG', { iconColor: '#8a97b8', ready: !has('golem') && player.mana >= 35, badge: '35' });
+  drawSlot(bx + 3 * (SZ + GAP), by, SZ, 'SPC', '🦴', { ready: minionBatchCd <= 0 && mc < MINION_CAP && player.mana >= 8, cd: minionBatchCd / MINION_BATCH_CD, badge: `${mc}/${MINION_CAP}`, small: true });
+  drawSlot(bx + 4 * (SZ + GAP), by, SZ, '우클릭', '💥', { ready: corpses.length > 0, badge: `${corpses.length}`, small: true });
+  drawSlot(bx + 5 * (SZ + GAP), by, SZ, 'R', 'PASS', { fill: game.ultGauge / 100, glow: game.ultGauge >= 100, iconColor: game.ultGauge >= 100 ? '#ffd700' : '#8a97b8', small: true });
+
+  // HP/마나 구슬
+  drawOrb(64, H - 64, 42, player.hp / player.maxHp, 'rgba(224,82,82,0.85)', `${Math.ceil(player.hp)}`, `HP ${player.maxHp}`);
+  drawOrb(W - 64, H - 64, 42, player.mana / player.maxMana, 'rgba(91,141,239,0.85)', `${Math.floor(player.mana)}`, '아메리카노');
+
+  // XP 스트립 (최하단)
+  drawBar(0, H - 6, W, 6, player.xp / player.xpNext, '#7ee0a3', 'rgba(0,0,0,0.7)');
+
+  // 대사창 (스킬바 위, 좌측)
+  ctx.textAlign = 'left';
+  let dy = H - 122;
+  for (let i = dialogues.length - 1; i >= 0; i--) {
+    const d = dialogues[i];
+    const a = clamp((d.life - d.t) / 0.6, 0, 1);
+    ctx.globalAlpha = a * 0.92;
+    ctx.font = 'bold 12px sans-serif';
+    const nameW = ctx.measureText(d.speaker).width;
+    ctx.font = '12px sans-serif';
+    const textW = ctx.measureText(d.text).width;
+    ctx.fillStyle = 'rgba(8,10,16,0.78)';
+    ctx.fillRect(14, dy - 15, nameW + textW + 30, 22);
+    ctx.fillStyle = d.color;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(d.speaker, 22, dy);
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(d.text, 22 + nameW + 10, dy);
+    ctx.globalAlpha = 1;
+    dy -= 26;
+  }
+}
+
+// ---------- 스토리 오버레이 ----------
+function drawStory() {
+  const st = game.story;
+  const [title, body] = STORY_PAGES[st.page];
+  ctx.fillStyle = 'rgba(5,7,12,0.94)';
+  ctx.fillRect(0, 0, W, H);
+  const a = clamp(st.t / 0.8, 0, 1);
+  ctx.globalAlpha = a;
+  ctx.fillStyle = '#ffb648';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, W / 2, 180);
+  ctx.fillStyle = '#d5dbe8';
+  ctx.font = '16px sans-serif';
+  body.split('\n').forEach((line, i) => ctx.fillText(line, W / 2, 240 + i * 30));
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#8a97b8';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(`${st.page + 1} / ${STORY_PAGES.length} — 클릭 또는 Space로 계속 ▶`, W / 2, H - 60);
 }
 
 function render() {
@@ -746,35 +997,10 @@ function render() {
     ctx.globalAlpha = 1;
   }
 
-  // HUD
-  drawBar(16, 16, 220, 14, player.hp / player.maxHp, '#e05252');
-  drawBar(16, 34, 220, 10, player.mana / player.maxMana, '#5b8def');
-  drawBar(16, 48, 220, 6, player.xp / player.xpNext, '#7ee0a3');
-  drawBar(16, 58, 220, 6, game.ultGauge / 100, game.ultGauge >= 100 ? '#ffd700' : '#8a97b8');
-  ctx.fillStyle = '#e6e6e6';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`HP ${Math.ceil(player.hp)}/${player.maxHp}`, 242, 27);
-  ctx.fillText(`아메리카노 ${Math.floor(player.mana)}`, 242, 43);
-  ctx.fillText(`Lv.${player.level}`, 242, 55);
-  ctx.fillText(game.ultGauge >= 100 ? 'PASS 준비완료! [R]' : `PASS ${Math.floor(game.ultGauge)}%`, 242, 66);
-  ctx.textAlign = 'right';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.fillText(`ACT ${game.act}`, W - 16, 26);
-  ctx.font = '11px sans-serif';
-  ctx.fillText(`남은 버그 ${enemies.length} · 처치 ${game.kills} · 커밋토큰 ${game.coins}`, W - 16, 44);
-  const mc = summons.filter(s => s.type === 'minion').length;
-  ctx.fillText(`서브에이전트 ${mc}/${MINION_CAP}` + (minionBatchCd > 0 ? ` · 배치쿨 ${minionBatchCd.toFixed(1)}s` : ''), W - 16, 60);
+  drawHud();
 
-  // 보스 HP 바 (어그로 시)
-  const boss = enemies.find(e => e.boss && e.aggro);
-  if (boss) {
-    drawBar(W / 2 - 220, H - 34, 440, 12, boss.hp / boss.maxHp, '#b8860b');
-    ctx.fillStyle = '#ffd88a';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('레거시 코드 골렘 — "이 코드... 누가 짰지?" / "7년 전의 너다, 덕산."', W / 2, H - 42);
-  }
+  // 스토리 오버레이
+  if (game.story) drawStory();
 
   // 배너
   if (game.banner) {
@@ -801,6 +1027,7 @@ let last = 0;
 function loop(ts) {
   const dt = Math.min((ts - last) / 1000, 0.05);
   last = ts;
+  if (game.story) game.story.t += dt;
   if (game.running) update(dt);
   render();
   requestAnimationFrame(loop);
@@ -812,17 +1039,19 @@ requestAnimationFrame(loop);
 
 document.getElementById('startBtn').addEventListener('click', () => {
   document.getElementById('titleScreen').classList.add('hidden');
+  AudioSys.init();
   player = null;
   game.coins = 0;
   resetGame();
-  game.running = true;
-  setBanner('ACT 1 — 강림', '덕산, 판교역 3번 출구에 나타나다. 남동쪽에 레거시 유적지가 있다.');
+  startStory(); // 오프닝 내레이션 → 클릭으로 넘기면 게임 시작
 });
 document.getElementById('retryBtn').addEventListener('click', () => {
   document.getElementById('gameOverScreen').classList.add('hidden');
+  AudioSys.init();
   player = null;
   game.coins = 0;
   resetGame();
   game.running = true;
   setBanner('재강림', '"이번엔 안 죽는다" — 덕산');
+  say('ducksan', '부동산은 무슨. 판교를 접수하기 전엔 못 돌아간다.');
 });
