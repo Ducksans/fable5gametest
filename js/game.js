@@ -54,11 +54,28 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (game.panel) return; // 패널 열림 중엔 전투 스킬 잠금
+  if (game.running && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) {
+    e.preventDefault(); usePotion(+e.code.slice(5) - 1); return;
+  }
+  if (game.running && e.code === 'KeyF') { e.preventDefault(); doDash(); return; }
   if (['Space', 'KeyQ', 'KeyW', 'KeyE', 'KeyR'].includes(e.code)) {
     e.preventDefault();
     if (game.running) castSkill(e.code);
   }
 });
+// 대시/블링크 (D) — 커서 방향으로 순간 이동 (Ctrl+Z Time Rewind 오마주)
+function doDash() {
+  if (player.dashCd > 0) { addText(player.x, player.y - 30, `대시 ${player.dashCd.toFixed(1)}s`, '#9cc4ff'); return; }
+  if (player.mana < 12) { addText(player.x, player.y - 30, '마나 부족', '#9cc4ff'); return; }
+  const t = toWorld(mouse.sx, mouse.sy);
+  const d = Math.hypot(t.x - player.x, t.y - player.y) || 1;
+  const dist = Math.min(d, 180);
+  player.x = clamp(player.x + (t.x - player.x) / d * dist, 30, WORLD - 30);
+  player.y = clamp(player.y + (t.y - player.y) / d * dist, 30, WORLD - 30);
+  player.mana -= 12; player.dashCd = 2.2; player.invuln = Math.max(player.invuln, 0.35);
+  spawnRing(player.x, player.y, '#9cc4ff'); AudioSys.sfx.drill();
+  addText(player.x, player.y - 30, 'Ctrl+Z!', '#9cc4ff', 0.7);
+}
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
@@ -210,7 +227,25 @@ function newPlayer() {
     charName: '덕산', classId: 'necro', tint: '#f5f5f0', auraTint: '#c792ea',
     // 스탯 (B) — str 소환딜 · dex 공속/크리 · int 폭발딜/마나 · vit 최대HP
     stats: { str: 5, dex: 5, int: 5, vit: 5 }, statPoints: 0,
+    // 전투 (D) — 포션 벨트 · 대시 · 각성 버프
+    potions: [{ t: 'ame', charges: 5, max: 5 }, { t: 'energy', charges: 3, max: 3 }, { t: 'crunch', charges: 2, max: 2 }],
+    dashCd: 0, buffT: 0,
   };
+}
+// 포션 (D) — 로어: 아메리카노·에너지드링크·크런치 각성제
+const POTIONS = {
+  ame: { name: '아메리카노', key: '1', color: '#5b8def', desc: '마나 40 회복' },
+  energy: { name: '에너지드링크', key: '2', color: '#7ee0a3', desc: 'HP 35% 회복' },
+  crunch: { name: '크런치 각성제', key: '3', color: '#ffd54a', desc: '8초간 소환수 데미지 +40%' },
+};
+function usePotion(i) {
+  const p = player.potions[i];
+  if (!p || p.charges <= 0) { addText(player.x, player.y - 30, `${POTIONS[p ? p.t : 'ame'].name} 없음`, '#ff9c9c'); return; }
+  p.charges--;
+  if (p.t === 'ame') player.mana = Math.min(player.maxMana, player.mana + 40);
+  else if (p.t === 'energy') { player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.35); addText(player.x, player.y - 24, '+HP', '#7ee0a3'); }
+  else if (p.t === 'crunch') { player.buffT = 8; setBanner('크런치 각성!', '8초간 소환수 데미지 +40% — 야근의 힘'); }
+  AudioSys.sfx.pickup();
 }
 
 // ---------- 클래스 (A) — 시작 스탯·보너스가 다른 소환 아키타입 ----------
@@ -438,6 +473,7 @@ function minionDmgFactor() {
   let f = (1 + getStat('minionDmg')) * statFactor().minionDmg;
   if (getStat('trinity') > 0 &&
       summons.some(s => s.type === 'warrior') && summons.some(s => s.type === 'mage') && summons.some(s => s.type === 'golem')) f *= 1.3;
+  if (player.buffT > 0) f *= 1.4; // 크런치 각성
   return f;
 }
 
@@ -598,7 +634,7 @@ function explodeCorpse(c, mult) {
   if (crit) addText(c.x, c.y - 20, '청축 크리! 찰칵!!', '#5bc8f7', 0.8);
   if (getStat('ground') > 0) zones.push({ x: c.x, y: c.y, t: 0, dur: 2, dps: dmg * 0.4 }); // 타건 장판
   for (const e of enemies) {
-    if (!e.dead && dist2(c, e) < 130 * 130) damageEnemy(e, dmg, '#ffb648');
+    if (!e.dead && dist2(c, e) < 130 * 130) { damageEnemy(e, dmg, '#ffb648'); e.status = e.status || {}; e.status.burn = Math.max(e.status.burn || 0, 3); } // 화상
   }
 }
 
@@ -667,16 +703,27 @@ const ENEMY_DEFS = {
   boss:    { name: '레거시 코드 골렘', hp: 1400, dmg: 24, speed: 55, r: 36, color: '#b8860b', xp: 200, coin: 60, label: 'LEGACY', boss: true },
 };
 
+const MONSTER_MODS = ['swift', 'berserk', 'shield', 'volatile'];
+const MOD_NAMES = { swift: '신속', berserk: '광폭', shield: '보호막', volatile: '폭발성' };
 function spawnEnemyAt(type, x, y, mult) {
   const d = ENEMY_DEFS[type];
-  enemies.push({
+  let dmg = d.dmg * (0.8 + mult * 0.2);
+  const e = {
     type, ...d,
     x, y, homeX: x, homeY: y,
-    hp: d.hp * mult, maxHp: d.hp * mult, dmg: d.dmg * (0.8 + mult * 0.2),
+    hp: d.hp * mult, maxHp: d.hp * mult, dmg,
     atkTimer: 0, orbitA: rand(0, Math.PI * 2), breakHits: 0,
-    aggro: false, slamT: 5,
-  });
-  return enemies[enemies.length - 1];
+    aggro: false, slamT: 5, status: null, mods: null,
+  };
+  // 몬스터 어픽스 (D) — 엘리트는 1개 모드
+  if (type === 'elite') {
+    e.mods = [MONSTER_MODS[Math.floor(rand(0, MONSTER_MODS.length))]];
+    if (e.mods.includes('berserk')) e.dmg *= 1.5;
+    if (e.mods.includes('shield')) { e.hp *= 1.4; e.maxHp = e.hp; }
+    e.name = MOD_NAMES[e.mods[0]] + ' ' + e.name;
+  }
+  enemies.push(e);
+  return e;
 }
 
 // ---------- 보스 로스터 (ACT마다 로테이션 · 로어 20~22) ----------
@@ -833,6 +880,16 @@ function damageEnemy(e, dmg, color, opts) {
     else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 1; }
     else if (Math.random() < 0.07) dropItem(e.x, e.y);
     else if (Math.random() < 0.04) game.frag = (game.frag || 0) + 1;
+    // 포션 충전 리필 (D)
+    if (Math.random() < 0.08 && player.potions) {
+      const depleted = player.potions.filter((p) => p.charges < p.max);
+      if (depleted.length) { const p = depleted[Math.floor(rand(0, depleted.length))]; p.charges++; }
+    }
+    // 폭발성 몬스터 사망 폭발 (D)
+    if (e.mods && e.mods.includes('volatile')) {
+      spawnRing(e.x, e.y, '#ff5b5b'); game.shake = Math.max(game.shake, 6);
+      if (dist2(e, player) < 110 * 110 && player.invuln <= 0) { player.hp -= 18; player.invuln = 0.4; addText(player.x, player.y - 24, '폭발!', '#ff5b5b'); }
+    }
     if (game.focusTarget === e) game.focusTarget = null;
     if (e.boss) {
       game.bossDown = true;
@@ -882,6 +939,9 @@ function update(dt) {
   game.saveTimer = (game.saveTimer || 0) - dt;
   if (game.saveTimer <= 0) { game.saveTimer = 10; saveGame(); }
   if (game.savedFlash > 0) game.savedFlash -= dt;
+  // 전투 쿨/버프 (D)
+  player.dashCd = Math.max(0, (player.dashCd || 0) - dt);
+  if (player.buffT > 0) player.buffT -= dt;
 
   // ACT 클리어 → 다음 ACT
   if (game.bossDown) {
@@ -977,6 +1037,7 @@ function update(dt) {
     for (const e of enemies) {
       if (!e.dead && dist2(p, e) < (e.r + 6) * (e.r + 6)) {
         damageEnemy(e, p.dmg, p.color, { drill: true });
+        if (!e.dead) { e.status = e.status || {}; e.status.chill = Math.max(e.status.chill || 0, 2); } // GG 드릴 빙결
         p.t = 99; break;
       }
     }
@@ -987,6 +1048,12 @@ function update(dt) {
   const golem = summons.find(s => s.taunt);
   for (const e of enemies) {
     e.atkTimer -= dt;
+    // 상태이상 (D) — 화상(DoT)·빙결(둔화)
+    if (e.status) {
+      if (e.status.burn > 0) { e.status.burn -= dt; e._bd = (e._bd || 0) - dt; if (e._bd <= 0 && !e.dead) { e._bd = 0.5; damageEnemy(e, 4 + player.level, '#ff8040', { force: true }); } }
+      if (e.status.chill > 0) e.status.chill -= dt;
+    }
+    if (e.dead) continue;
     if (!e.aggro) {
       if (dist2(e, player) < 300 * 300) e.aggro = true;
       else {
@@ -1014,13 +1081,14 @@ function update(dt) {
       }
     }
     const d = Math.sqrt(dist2(e, target)) || 1;
+    const espd = e.speed * (e.status && e.status.chill > 0 ? 0.5 : 1) * (e.mods && e.mods.includes('swift') ? 1.45 : 1);
     if (e.orbit) {
       e.orbitA += dt * 2.2;
-      e.x += ((target.x - e.x) / d * e.speed + Math.cos(e.orbitA) * 60) * dt;
-      e.y += ((target.y - e.y) / d * e.speed + Math.sin(e.orbitA) * 60) * dt;
+      e.x += ((target.x - e.x) / d * espd + Math.cos(e.orbitA) * 60) * dt;
+      e.y += ((target.y - e.y) / d * espd + Math.sin(e.orbitA) * 60) * dt;
     } else {
-      e.x += (target.x - e.x) / d * e.speed * dt;
-      e.y += (target.y - e.y) / d * e.speed * dt;
+      e.x += (target.x - e.x) / d * espd * dt;
+      e.y += (target.y - e.y) / d * espd * dt;
     }
     if (d < e.r + target.r + 4 && e.atkTimer <= 0) {
       e.atkTimer = 0.8;
@@ -1682,6 +1750,27 @@ function drawHud() {
   // HP/마나 구슬
   drawOrb(64, H - 64, 42, player.hp / player.maxHp, 'rgba(224,82,82,0.85)', `${Math.ceil(player.hp)}`, `HP ${player.maxHp}`);
   drawOrb(W - 64, H - 64, 42, player.mana / player.maxMana, 'rgba(91,141,239,0.85)', `${Math.floor(player.mana)}`, '아메리카노');
+
+  // 포션 벨트 (D) — HP 구슬 우측
+  if (player.potions) {
+    const px0 = 118, py0 = H - 44;
+    player.potions.forEach((p, i) => {
+      const px = px0 + i * 34, def = POTIONS[p.t];
+      ctx.fillStyle = 'rgba(18,22,34,0.9)'; ctx.fillRect(px, py0, 28, 32);
+      ctx.fillStyle = p.charges > 0 ? def.color : '#2a3346';
+      ctx.fillRect(px, py0 + 32 - (32 * p.charges / p.max), 28, 32 * p.charges / p.max);
+      ctx.strokeStyle = '#3a4560'; ctx.strokeRect(px, py0, 28, 32);
+      ctx.fillStyle = '#ffd88a'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText(def.key, px + 2, py0 + 10);
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText(p.charges, px + 26, py0 + 30);
+    });
+    // 대시·버프 표시
+    ctx.textAlign = 'left'; ctx.font = '10px sans-serif';
+    ctx.fillStyle = player.dashCd > 0 ? '#59616f' : '#9cc4ff';
+    ctx.fillText(player.dashCd > 0 ? `대시 F ${player.dashCd.toFixed(1)}s` : '대시 F ✓', px0, py0 - 6);
+    if (player.buffT > 0) { ctx.fillStyle = '#ffd54a'; ctx.fillText(`⚡크런치 ${player.buffT.toFixed(1)}s`, px0 + 90, py0 - 6); }
+  }
 
   // XP 스트립 (최하단)
   drawBar(0, H - 6, W, 6, player.xp / player.xpNext, '#7ee0a3', 'rgba(0,0,0,0.7)');
@@ -2355,7 +2444,7 @@ function saveGame() {
         baseMaxHp: player.baseMaxHp, baseMaxMana: player.baseMaxMana, baseManaRegen: player.baseManaRegen,
         points: player.points, tree: player.tree, inv: player.inv, equip: player.equip,
         charName: player.charName, classId: player.classId, tint: player.tint, auraTint: player.auraTint,
-        stats: player.stats, statPoints: player.statPoints,
+        stats: player.stats, statPoints: player.statPoints, potions: player.potions,
       },
     }));
     game.savedFlash = 1.4;
@@ -2379,6 +2468,7 @@ function applySave(s) {
     charName: s.p.charName || '덕산', classId: s.p.classId || 'necro',
     tint: s.p.tint || '#f5f5f0', auraTint: s.p.auraTint || '#c792ea',
     stats: s.p.stats || { str: 5, dex: 5, int: 5, vit: 5 }, statPoints: s.p.statPoints || 0,
+    potions: s.p.potions || newPlayer().potions,
   });
   resetGame(s.act || 1);     // act 진실값 → player·flags·kills·coins 보존하며 월드 재생성
   applyDerived();
