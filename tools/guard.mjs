@@ -59,9 +59,31 @@ for (const f of required) {
   must(!secret.test(read(f)), `비밀 없음: ${f}`, '키/토큰 의심 문자열');
 }
 
+// ── P8 코드 건강 (병목/거대함수/고아 기계 강제) ──
+// 파일 줄수 예산: 초과하면 커밋 차단(=쪼개기 강제). 함수는 경고. 고아는 차단.
+const LINE_BUDGET = { 'js/game.js': 3000, 'js/audio.js': 200, 'tools/guard.mjs': 200 };
+const warnHealth = [];
+for (const f of ['js/game.js', 'js/audio.js', 'tools/guard.mjs']) {
+  if (!fs.existsSync(f)) continue;
+  const src = read(f), n = src.split('\n').length;
+  const budget = LINE_BUDGET[f] || 500;
+  must(n <= budget, `줄수 예산: ${f} (${n}/${budget})`, `예산 초과 — 쪼개라`);
+  // 최대 함수 길이 (경고)
+  const lines = src.split('\n'); let cur = null, start = 0, maxLen = 0, maxName = '';
+  lines.forEach((ln, i) => { if (/^function /.test(ln)) { if (cur) { const len = i - start; if (len > maxLen) { maxLen = len; maxName = cur; } } cur = ln.slice(9).split('(')[0]; start = i; } });
+  if (maxLen > 250) warnHealth.push(`거대 함수: ${f} ${maxName}() ${maxLen}줄 (>250 — 쪼갤 것)`);
+}
+// 고아 파일: js는 index.html/tools에서 참조돼야
+for (const f of ['js/game.js', 'js/audio.js']) {
+  const base = f.split('/').pop();
+  const refd = fs.existsSync('index.html') && read('index.html').includes(base);
+  must(refd, `참조됨(고아 아님): ${f}`, 'index.html에서 미참조');
+}
+
 // 결과 보고 (정직: PASS/FAIL을 근거와 함께)
-console.log('── 판교 가드 · 반드리프트·반환각 (fail-closed) ──');
+console.log('── 판교 가드 · 반드리프트·반환각 + 코드건강 (fail-closed) ──');
 for (const o of ok) console.log('  ✅ ' + o);
+for (const w of warnHealth) console.log('  ⚠️  ' + w);
 for (const f of fails) console.log('  🔴 ' + f);
 if (fails.length) {
   console.log(`\n🔴 가드 실패 ${fails.length}건 — 커밋 차단. 도구가 잡았다, 내 기억이 아니라.`);
