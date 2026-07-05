@@ -1525,8 +1525,10 @@ function drawLogPanel() {
     ctx.beginPath(); ctx.moveTo(cx, y + 4); ctx.lineTo(PANEL.x + PANEL.w - 40, y + 4); ctx.stroke();
     y += 22;
   }
-  ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('2025년 100일의 전쟁에서 포기했던 이가, 2026년 3금강과 다시 일어섰다.', W / 2, PANEL.y + PANEL.h - 16);
+  ctx.fillStyle = '#ffd88a'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('坐卽板橋 — 내가 앉은 자리가 곧 이천이자 판교다', W / 2, PANEL.y + PANEL.h - 30);
+  ctx.fillStyle = '#6a7690'; ctx.font = 'italic 11px sans-serif';
+  ctx.fillText('2025년 100일의 전쟁에서 포기했던 이가, 2026년 3금강과 다시 일어섰다.', W / 2, PANEL.y + PANEL.h - 13);
 }
 
 function drawInvPanel() {

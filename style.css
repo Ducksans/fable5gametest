@@ -29,6 +29,16 @@ canvas {
 .hidden { display: none !important; }
 h1 { font-size: 42px; color: #ffb648; letter-spacing: 2px; text-shadow: 0 0 24px rgba(255,120,40,.45); }
 h2 { font-size: 18px; color: #9aa4b8; font-weight: 500; }
+.epigraph {
+  margin: 2px 0 2px;
+  font-size: 26px; font-weight: 700; letter-spacing: 8px;
+  color: #ffd88a; text-shadow: 0 0 18px rgba(255,182,72,.35);
+}
+.epigraph span {
+  display: block;
+  font-size: 12px; font-weight: 400; letter-spacing: 1px;
+  color: #8a97b8; margin-top: 4px;
+}
 .lore { font-size: 14px; line-height: 1.7; color: #c2cad9; }
 .lore b { color: #7ee0a3; }
 .keys {
