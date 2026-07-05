@@ -233,13 +233,15 @@ function classById(id) { return CLASSES.find((c) => c.id === id) || CLASSES[0]; 
 // 스탯 파생 계수 — 전투 전반에 실제 반영
 function statFactor() {
   const s = player.stats || { str: 5, dex: 5, int: 5, vit: 5 };
+  // 장비/젬/세트가 주는 스탯도 합산
+  const str = s.str + getStat('str'), dex = s.dex + getStat('dex'), int = s.int + getStat('int'), vit = s.vit + getStat('vit');
   return {
-    minionDmg: 1 + (s.str - 5) * 0.03,   // 힘 → 소환수 데미지
-    boomDmg: 1 + (s.int - 5) * 0.03,     // 지능 → 폭발/드릴 데미지
-    atkSpd: 1 + (s.dex - 5) * 0.02,      // 민첩 → 공속
-    critBonus: (s.dex - 5) * 0.008,      // 민첩 → 추가 크리 확률
-    hpBonus: (s.vit - 5) * 8,            // 체력 → 최대 HP
-    manaBonus: (s.int - 5) * 4,          // 지능 → 최대 마나
+    minionDmg: 1 + (str - 5) * 0.03,   // 힘 → 소환수 데미지
+    boomDmg: 1 + (int - 5) * 0.03,     // 지능 → 폭발/드릴 데미지
+    atkSpd: 1 + (dex - 5) * 0.02,      // 민첩 → 공속
+    critBonus: (dex - 5) * 0.008,      // 민첩 → 추가 크리 확률
+    hpBonus: (vit - 5) * 8,            // 체력 → 최대 HP
+    manaBonus: (int - 5) * 4,          // 지능 → 최대 마나
   };
 }
 
@@ -248,6 +250,7 @@ function resetGame(act) {
     running: false, time: 0,
     act: act || 1,
     kills: act ? game.kills : 0, coins: act ? (game.coins || 0) : 0,
+    frag: act ? (game.frag || 0) : 0,
     ultGauge: 0, banner: null, shake: 0,
     focusTarget: null, bossDown: false, actClearT: 0,
     flags: act ? game.flags : {}, story: null, panel: null,
@@ -320,12 +323,15 @@ const BRANCH_COLORS = ['#7ee0a3', '#ffb648', '#9cc4ff'];
    아이템 시스템 (POE식 등급 + 랜덤 어픽스)
    등급: 일반(0옵) → 매직(1~2옵) → 레어(3~4옵) → 유니크(고정 명품)
    ============================================================ */
-const SLOTS = ['weapon', 'body', 'head', 'amulet', 'ring', 'charm'];
-const SLOT_NAMES = { weapon: '무기', body: '상의', head: '머리', amulet: '목걸이', ring: '반지', charm: '부적' };
+const SLOTS = ['weapon', 'body', 'head', 'gloves', 'boots', 'belt', 'amulet', 'ring', 'charm'];
+const SLOT_NAMES = { weapon: '무기', body: '상의', head: '머리', gloves: '장갑', boots: '신발', belt: '벨트', amulet: '목걸이', ring: '반지', charm: '부적' };
 const BASES = [
   { slot: 'weapon', name: '청테이프 키보드' }, { slot: 'weapon', name: '멤브레인 키보드' },
   { slot: 'body', name: '늘어난 런닝셔츠' }, { slot: 'body', name: '판교 후드집업' },
   { slot: 'head', name: '유선 이어폰' }, { slot: 'head', name: '싸구려 헤드셋' },
+  { slot: 'gloves', name: '손목보호대' }, { slot: 'gloves', name: '반장갑' },
+  { slot: 'boots', name: '삼선 슬리퍼' }, { slot: 'boots', name: '런닝화' },
+  { slot: 'belt', name: '노트북 파우치' }, { slot: 'belt', name: '사원증 랜야드' },
   { slot: 'amulet', name: 'receipt 목걸이' }, { slot: 'ring', name: '멱등 반지' }, { slot: 'charm', name: 'dev키 부적' },
 ];
 const AFFIXES = [
@@ -337,32 +343,54 @@ const AFFIXES = [
   { key: 'moveSpd', name: '이동속도', lo: 0.04, hi: 0.10, pct: true },
   { key: 'tokenGain', name: '커밋토큰 획득', lo: 0.10, hi: 0.30, pct: true },
   { key: 'ultGain', name: 'PASS 게이지 획득', lo: 0.10, hi: 0.25, pct: true },
+  { key: 'str', name: '힘', lo: 1, hi: 4, pct: false },
+  { key: 'dex', name: '민첩', lo: 1, hi: 4, pct: false },
+  { key: 'int', name: '지능', lo: 1, hi: 4, pct: false },
+  { key: 'vit', name: '체력', lo: 1, hi: 4, pct: false },
 ];
+// 세트 (로어: IT 힙스터 세트)
+const SETS = {
+  hipster: { name: 'IT 힙스터 세트', pieces: ['터틀넥 오브 판교', '노이즈캔슬링 헤드폰'], bonus2: [{ key: 'moveSpd', v: 0.10 }, { key: 'boomDmg', v: 0.15 }] },
+};
 const UNIQUES = [
   { slot: 'weapon', name: '기계식 키보드', quote: '"손가락이 아프지만 버그도 아프다"', affixes: [{ key: 'minionDmg', v: 0.25 }, { key: 'boomDmg', v: 0.30 }] },
   { slot: 'charm', name: '휘발된 라이브 서명키', quote: '"파일 부재 ≠ 휘발. 위치를 잊었을 뿐."', affixes: [{ key: 'minionHp', v: 0.40 }, { key: 'manaRegen', v: 2 }] },
   { slot: 'ring', name: '80라운드 회고의 반지', quote: '소환 마나 소모 -20% 영구', affixes: [{ key: 'summonCost', v: -0.20 }, { key: 'ultGain', v: 0.20 }] },
-  { slot: 'body', name: '터틀넥 오브 판교', quote: 'IT 힙스터의 정장', affixes: [{ key: 'maxHp', v: 60 }, { key: 'moveSpd', v: 0.05 }] },
+  { slot: 'body', name: '터틀넥 오브 판교', quote: 'IT 힙스터의 정장 (세트)', set: 'hipster', affixes: [{ key: 'maxHp', v: 60 }, { key: 'moveSpd', v: 0.05 }] },
+  { slot: 'head', name: '노이즈캔슬링 헤드폰', quote: '세상의 소음을 끈다 (세트)', set: 'hipster', affixes: [{ key: 'int', v: 5 }, { key: 'ultGain', v: 0.15 }] },
 ];
-const RARITY = { normal: { name: '일반', color: '#d5dbe8' }, magic: { name: '매직', color: '#6b9bff' }, rare: { name: '레어', color: '#ffd700' }, unique: { name: '유니크', color: '#f7734b' } };
+// 젬 (소켓 삽입) — 로어 색축 오마주
+const GEMS = [
+  { name: '갈축 젬', affix: { key: 'minionDmg', v: 0.06 }, color: '#8a5a3a' },
+  { name: '청축 젬', affix: { key: 'boomDmg', v: 0.08 }, color: '#5b8def' },
+  { name: '적축 젬', affix: { key: 'moveSpd', v: 0.04 }, color: '#ff6b6b' },
+  { name: '흑축 젬', affix: { key: 'maxHp', v: 18 }, color: '#3a3a44' },
+];
+const RARITY = { normal: { name: '일반', color: '#d5dbe8' }, magic: { name: '매직', color: '#6b9bff' }, rare: { name: '레어', color: '#ffd700' }, unique: { name: '유니크', color: '#f7734b' }, gem: { name: '젬', color: '#7ee0a3' } };
 
-function rollItem(forceRarity) {
+function dropItemLevel() { return 1 + (game.act - 1) * 5 + Math.floor((player ? player.level : 1) / 2); }
+
+function rollItem(forceRarity, ilvl) {
+  ilvl = ilvl || dropItemLevel();
   const roll = Math.random();
   let rarity = forceRarity || (roll < 0.5 ? 'normal' : roll < 0.85 ? 'magic' : 'rare');
   if (rarity === 'unique') {
     const u = UNIQUES[Math.floor(rand(0, UNIQUES.length))];
-    return { ...u, rarity: 'unique', affixes: u.affixes.map(a => ({ ...a })) };
+    return { ...u, rarity: 'unique', ilvl, sockets: [], affixes: u.affixes.map(a => ({ ...a })) };
   }
   const base = BASES[Math.floor(rand(0, BASES.length))];
   const n = rarity === 'normal' ? 0 : rarity === 'magic' ? (Math.random() < 0.5 ? 1 : 2) : (Math.random() < 0.5 ? 3 : 4);
   const pool = [...AFFIXES].sort(() => Math.random() - 0.5).slice(0, n);
-  const affixes = pool.map(a => ({ key: a.key, v: a.pct ? +rand(a.lo, a.hi).toFixed(2) : Math.round(rand(a.lo, a.hi)) }));
+  const mag = 1 + ilvl * 0.02; // 아이템 레벨 → 옵션 강화
+  const affixes = pool.map(a => ({ key: a.key, v: a.pct ? +(rand(a.lo, a.hi) * mag).toFixed(2) : Math.round(rand(a.lo, a.hi) * mag) }));
   const prefix = rarity === 'rare' ? ['판교의 ', '야근한 ', '리팩토링된 ', '무결성 '][Math.floor(rand(0, 4))] : '';
-  return { slot: base.slot, name: prefix + base.name, rarity, affixes };
+  const sockN = rarity === 'rare' ? (Math.random() < 0.5 ? 2 : 1) : rarity === 'magic' ? (Math.random() < 0.4 ? 1 : 0) : 0;
+  return { slot: base.slot, name: prefix + base.name, rarity, ilvl, sockets: new Array(sockN).fill(null), affixes };
 }
+function rollGem() { const g = GEMS[Math.floor(rand(0, GEMS.length))]; return { gem: true, rarity: 'gem', name: g.name, color: g.color, affix: { ...g.affix } }; }
 
 function dropItem(x, y, forceRarity) {
-  const item = rollItem(forceRarity);
+  const item = (!forceRarity && Math.random() < 0.18) ? rollGem() : rollItem(forceRarity);
   groundItems.push({ x: x + rand(-20, 20), y: y + rand(-20, 20), item });
 }
 
@@ -372,8 +400,16 @@ function affixLabel(a) {
   if (!def) return a.key;
   return def.pct ? `${def.name} +${Math.round(a.v * 100)}%` : `${def.name} +${a.v}`;
 }
+// 세트 보너스 집계
+function activeSetBonus() {
+  const counts = {};
+  for (const s of SLOTS) { const it = player.equip[s]; if (it && it.set) counts[it.set] = (counts[it.set] || 0) + 1; }
+  const out = [];
+  for (const id in counts) { if (counts[id] >= 2 && SETS[id]) out.push(...SETS[id].bonus2); }
+  return out;
+}
 
-// ---------- 스탯 집계: 트리 + 장비 ----------
+// ---------- 스탯 집계: 트리 + 장비 + 젬 + 세트 ----------
 function getStat(key) {
   let v = 0;
   for (const n of TREE) {
@@ -382,8 +418,11 @@ function getStat(key) {
   }
   for (const s of SLOTS) {
     const it = player.equip[s];
-    if (it) for (const a of it.affixes) if (a.key === key) v += a.v;
+    if (!it) continue;
+    for (const a of it.affixes) if (a.key === key) v += a.v;
+    if (it.sockets) for (const g of it.sockets) if (g && g.affix.key === key) v += g.affix.v;
   }
+  for (const b of activeSetBonus()) if (b.key === key) v += b.v;
   return v;
 }
 function applyDerived() {
@@ -414,9 +453,37 @@ function allocNode(n) {
   applyDerived();
   saveGame();
 }
+function socketGem(idx) {
+  const gem = player.inv[idx];
+  if (!gem || !gem.gem) return false;
+  for (const s of SLOTS) {
+    const it = player.equip[s];
+    if (it && it.sockets) {
+      const free = it.sockets.indexOf(null);
+      if (free >= 0) { it.sockets[free] = { name: gem.name, color: gem.color, affix: { ...gem.affix } }; player.inv.splice(idx, 1); AudioSys.sfx.pass(); say('sys', `${gem.name} 소켓 삽입 → ${it.name}`, 3); applyDerived(); saveGame(); return true; }
+    }
+  }
+  say('sys', '빈 소켓이 있는 장착 장비가 없다', 2.5); return false;
+}
+function rerollRandomRare(cost) {
+  cost = cost || 3;
+  if ((game.frag || 0) < cost) { say('sys', `무결성 파편 부족 (${game.frag || 0}/${cost})`, 2.5); return; }
+  const idxs = player.inv.map((it, i) => (it && (it.rarity === 'rare' || it.rarity === 'magic') ? i : -1)).filter((i) => i >= 0);
+  if (!idxs.length) { say('sys', '리롤할 레어/매직 아이템이 가방에 없다', 2.5); return; }
+  const i = idxs[Math.floor(rand(0, idxs.length))];
+  const old = player.inv[i];
+  const fresh = rollItem(old.rarity, old.ilvl || dropItemLevel());
+  fresh.sockets = old.sockets || [];
+  player.inv[i] = fresh;
+  game.frag -= cost;
+  AudioSys.sfx.levelup();
+  say('sys', `리롤! ${old.name} → ${fresh.name} (파편 -${cost})`, 3);
+  saveGame();
+}
 function equipItem(idx) {
   const it = player.inv[idx];
   if (!it) return;
+  if (it.gem) { socketGem(idx); return; }
   const prev = player.equip[it.slot];
   player.equip[it.slot] = it;
   player.inv.splice(idx, 1);
@@ -761,10 +828,11 @@ function damageEnemy(e, dmg, color, opts) {
     for (let i = 0; i < drops; i++) {
       orbs.push({ x: e.x + rand(-16, 16), y: e.y + rand(-16, 16), kind: i % 2 ? 'coin' : 'xp', v: e.boss ? 10 : e.elite ? 5 : 3 });
     }
-    // POE식 아이템 드랍
-    if (e.boss) { dropItem(e.x, e.y, 'rare'); dropItem(e.x, e.y, 'rare'); if (Math.random() < 0.5) dropItem(e.x, e.y, 'unique'); }
-    else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); }
+    // POE식 아이템 + 무결성 파편 드랍
+    if (e.boss) { dropItem(e.x, e.y, 'rare'); dropItem(e.x, e.y, 'rare'); if (Math.random() < 0.5) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 5; }
+    else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 1; }
     else if (Math.random() < 0.07) dropItem(e.x, e.y);
+    else if (Math.random() < 0.04) game.frag = (game.frag || 0) + 1;
     if (game.focusTarget === e) game.focusTarget = null;
     if (e.boss) {
       game.bossDown = true;
@@ -1660,6 +1728,7 @@ function panelClick(sx, sy) {
       if ((sx - p.x) ** 2 + (sy - p.y) ** 2 < 22 * 22) { allocNode(n); return; }
     }
   } else if (game.panel === 'inv') {
+    if (invRerollBtn && sx > invRerollBtn.x && sx < invRerollBtn.x + invRerollBtn.w && sy > invRerollBtn.y && sy < invRerollBtn.y + invRerollBtn.h) { rerollRandomRare(3); return; }
     for (let i = 0; i < SLOTS.length; i++) {
       const p = equipSlotPos(i);
       if (sx > p.x && sx < p.x + 52 && sy > p.y && sy < p.y + 52) { unequipItem(SLOTS[i]); return; }
@@ -1671,11 +1740,12 @@ function panelClick(sx, sy) {
   }
 }
 function equipSlotPos(i) {
-  return { x: PANEL.x + 40 + (i % 2) * 66, y: PANEL.y + 90 + Math.floor(i / 2) * 66 };
+  return { x: PANEL.x + 30 + (i % 3) * 58, y: PANEL.y + 92 + Math.floor(i / 3) * 58 };
 }
 function invCellPos(i) {
-  return { x: PANEL.x + 250 + (i % 6) * 52, y: PANEL.y + 90 + Math.floor(i / 6) * 52 };
+  return { x: PANEL.x + 250 + (i % 6) * 52, y: PANEL.y + 92 + Math.floor(i / 6) * 52 };
 }
+let invRerollBtn = null;
 function drawPanelFrame(title, sub) {
   ctx.fillStyle = 'rgba(5,7,12,0.93)';
   ctx.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
@@ -1689,24 +1759,44 @@ function drawPanelFrame(title, sub) {
   ctx.fillStyle = '#ff9c9c'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('✕', PANEL.x + PANEL.w - 20, PANEL.y + 26);
 }
-function drawItemTooltip(item, sx, sy) {
+function drawItemTooltip(item, sx, sy, compare) {
   const rc = RARITY[item.rarity];
-  const lines = [`${item.name}`, `[${rc.name}] ${SLOT_NAMES[item.slot]}`, ...item.affixes.map(affixLabel)];
-  if (item.quote) lines.push(item.quote);
+  const lines = []; // {t, c}
+  lines.push({ t: item.name, c: rc.color, b: true });
+  if (item.gem) { lines.push({ t: '[젬] ' + affixLabel(item.affix) + ' (소켓 삽입)', c: '#8a97b8' }); }
+  else {
+    lines.push({ t: `[${rc.name}] ${SLOT_NAMES[item.slot]} · iLv ${item.ilvl || 1}`, c: '#8a97b8' });
+    for (const a of item.affixes) lines.push({ t: affixLabel(a), c: '#c8e6ff' });
+    if (item.sockets && item.sockets.length) {
+      const filled = item.sockets.map((g) => g ? '●' : '○').join(' ');
+      lines.push({ t: `소켓 ${filled}`, c: '#7ee0a3' });
+      for (const g of item.sockets) if (g) lines.push({ t: '  └ ' + affixLabel(g.affix), c: '#9bdcb6' });
+    }
+    if (item.set && SETS[item.set]) lines.push({ t: `세트: ${SETS[item.set].name} (2세트 보너스)`, c: '#ffd54a' });
+    // 장착 비교 (인벤 호버 시)
+    if (compare) {
+      const eq = player.equip[item.slot];
+      lines.push({ t: eq ? `↔ 착용중: ${eq.name}` : '↔ 이 슬롯 비어있음', c: '#6a7690' });
+      const keys = new Set([...item.affixes.map((a) => a.key), ...(eq ? eq.affixes.map((a) => a.key) : [])]);
+      const sumA = (it, k) => (it ? it.affixes.filter((a) => a.key === k).reduce((s, a) => s + a.v, 0) : 0);
+      for (const k of keys) {
+        const d = sumA(item, k) - sumA(eq, k);
+        if (Math.abs(d) < 1e-6) continue;
+        const def = AFFIXES.find((x) => x.key === k);
+        const dv = def && def.pct ? `${d > 0 ? '+' : ''}${Math.round(d * 100)}%` : `${d > 0 ? '+' : ''}${Math.round(d)}`;
+        lines.push({ t: `  ${def ? def.name : k}: ${dv}`, c: d > 0 ? '#7ee0a3' : '#ff8080' });
+      }
+    }
+  }
+  if (item.quote) lines.push({ t: item.quote, c: '#c2a56a' });
   ctx.font = '11px sans-serif';
-  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 20;
-  const h = lines.length * 16 + 14;
+  const w = Math.max(...lines.map((l) => ctx.measureText(l.t).width)) + 22;
+  const h = lines.length * 15 + 14;
   const bx = clamp(sx + 14, 4, W - w - 4), by = clamp(sy - h - 6, 4, H - h - 4);
-  ctx.fillStyle = 'rgba(5,7,12,0.96)';
-  ctx.fillRect(bx, by, w, h);
-  ctx.strokeStyle = rc.color; ctx.lineWidth = 1;
-  ctx.strokeRect(bx, by, w, h);
+  ctx.fillStyle = 'rgba(5,7,12,0.97)'; ctx.fillRect(bx, by, w, h);
+  ctx.strokeStyle = rc.color; ctx.lineWidth = 1; ctx.strokeRect(bx, by, w, h);
   ctx.textAlign = 'left';
-  lines.forEach((l, i) => {
-    ctx.fillStyle = i === 0 ? rc.color : i === 1 ? '#8a97b8' : item.quote && i === lines.length - 1 ? '#c2a56a' : '#c8e6ff';
-    ctx.font = i === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
-    ctx.fillText(l, bx + 10, by + 18 + i * 16);
-  });
+  lines.forEach((l, i) => { ctx.fillStyle = l.c; ctx.font = l.b ? 'bold 12px sans-serif' : '11px sans-serif'; ctx.fillText(l.t, bx + 10, by + 17 + i * 15); });
 }
 function drawTreePanel() {
   drawPanelFrame('스킬트리 — 바이브 코딩 흑마법서', `보유 포인트 ${player.points} · 노드 클릭으로 습득 · 레벨업마다 +1`);
@@ -1917,12 +2007,19 @@ function drawLogPanel() {
   ctx.fillText('발원(2025-07-22) → 전이 → 결집(2026-06-15). 사초의 선은 끊기지 않았다.', W / 2, PANEL.y + PANEL.h - 12);
 }
 
+function socketDots(it, x, y) {
+  if (!it.sockets || !it.sockets.length) return;
+  for (let k = 0; k < it.sockets.length; k++) {
+    ctx.fillStyle = it.sockets[k] ? (it.sockets[k].color || '#7ee0a3') : '#3a4560';
+    ctx.beginPath(); ctx.arc(x + 6 + k * 8, y, 2.6, 0, Math.PI * 2); ctx.fill();
+  }
+}
 function drawInvPanel() {
-  drawPanelFrame('가방 & 장비 — 판교 파밍의 결실', `장비 클릭 = 해제 · 가방 클릭 = 장착 · 바닥템은 밟으면 획득 (${player.inv.length}/24)`);
+  drawPanelFrame('가방 & 장비 — 판교 파밍의 결실', `장비 클릭=해제 · 가방 클릭=장착/젬삽입 · 커밋토큰 ${game.coins} · 무결성 파편 ${game.frag || 0} (${player.inv.length}/24)`);
   ctx.fillStyle = '#8a97b8'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('장착 중', PANEL.x + 40, PANEL.y + 80);
   ctx.fillText('가방', PANEL.x + 250, PANEL.y + 80);
-  let hoverItem = null;
+  let hoverItem = null, hoverCompare = false;
   for (let i = 0; i < SLOTS.length; i++) {
     const p = equipSlotPos(i);
     const it = player.equip[SLOTS[i]];
@@ -1935,23 +2032,33 @@ function drawInvPanel() {
     if (it) {
       ctx.fillStyle = RARITY[it.rarity].color;
       ctx.font = 'bold 16px sans-serif';
-      ctx.fillText(it.name[0], p.x + 26, p.y + 28);
-      if (mouse.sx > p.x && mouse.sx < p.x + 52 && mouse.sy > p.y && mouse.sy < p.y + 52) hoverItem = it;
+      ctx.fillText(it.name[0], p.x + 26, p.y + 26);
+      socketDots(it, p.x + 6, p.y + 40);
+      if (mouse.sx > p.x && mouse.sx < p.x + 52 && mouse.sy > p.y && mouse.sy < p.y + 52) { hoverItem = it; hoverCompare = false; }
     }
   }
-  // 합산 스탯 요약
+  // 합산 스탯 요약 + 리롤 버튼
   ctx.fillStyle = '#8a97b8'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('합산 효과', PANEL.x + 40, PANEL.y + 310);
-  const keys = ['minionDmg', 'minionHp', 'boomDmg', 'maxHp', 'manaRegen', 'moveSpd', 'tokenGain', 'ultGain', 'summonCost'];
-  let sy2 = PANEL.y + 328;
-  ctx.font = '10px sans-serif';
+  ctx.fillText('합산 효과', PANEL.x + 30, PANEL.y + 296);
+  const keys = ['minionDmg', 'minionHp', 'boomDmg', 'maxHp', 'manaRegen', 'moveSpd', 'tokenGain', 'ultGain', 'summonCost', 'str', 'dex', 'int', 'vit'];
+  let sy2 = PANEL.y + 314; ctx.font = '10px sans-serif';
   for (const k of keys) {
     const v = getStat(k);
     if (!v) continue;
     ctx.fillStyle = '#c8e6ff';
-    ctx.fillText(affixLabel({ key: k, v }), PANEL.x + 40, sy2);
-    sy2 += 14;
+    ctx.fillText(affixLabel({ key: k, v }), PANEL.x + 30, sy2);
+    sy2 += 13; if (sy2 > PANEL.y + PANEL.h - 60) break;
   }
+  // 리롤 버튼
+  const rb = { x: PANEL.x + 250, y: PANEL.y + PANEL.h - 42, w: 200, h: 26 };
+  ctx.fillStyle = (game.frag || 0) >= 3 ? '#2a3f2a' : '#1c2230';
+  ctx.fillRect(rb.x, rb.y, rb.w, rb.h);
+  ctx.strokeStyle = '#7ee0a3'; ctx.strokeRect(rb.x, rb.y, rb.w, rb.h);
+  ctx.fillStyle = (game.frag || 0) >= 3 ? '#9bedba' : '#59616f'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('↻ 랜덤 레어/매직 리롤 (무결성 파편 3)', rb.x + rb.w / 2, rb.y + 17);
+  invRerollBtn = rb;
+  // 가방 셀
+  ctx.textAlign = 'center';
   for (let i = 0; i < 24; i++) {
     const p = invCellPos(i);
     const it = player.inv[i];
@@ -1961,14 +2068,15 @@ function drawInvPanel() {
     ctx.lineWidth = 1.5; ctx.strokeRect(p.x, p.y, 46, 46);
     if (it) {
       ctx.fillStyle = RARITY[it.rarity].color;
-      ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(it.name[0], p.x + 23, p.y + 22);
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillText(it.gem ? '◆' : it.name[0], p.x + 23, p.y + 20);
       ctx.fillStyle = '#5d6b8a'; ctx.font = '8px sans-serif';
-      ctx.fillText(SLOT_NAMES[it.slot], p.x + 23, p.y + 40);
-      if (mouse.sx > p.x && mouse.sx < p.x + 46 && mouse.sy > p.y && mouse.sy < p.y + 46) hoverItem = it;
+      ctx.fillText(it.gem ? '젬' : SLOT_NAMES[it.slot], p.x + 23, p.y + 39);
+      if (!it.gem) socketDots(it, p.x + 4, p.y + 43);
+      if (mouse.sx > p.x && mouse.sx < p.x + 46 && mouse.sy > p.y && mouse.sy < p.y + 46) { hoverItem = it; hoverCompare = !it.gem; }
     }
   }
-  if (hoverItem) drawItemTooltip(hoverItem, mouse.sx, mouse.sy);
+  if (hoverItem) drawItemTooltip(hoverItem, mouse.sx, mouse.sy, hoverCompare);
 }
 
 // ---------- 스토리 오버레이 ----------
@@ -2240,7 +2348,7 @@ function saveGame() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       v: 1, ts: Date.now(),
-      act: game.act, coins: game.coins, kills: game.kills, comboMax: game.comboMax || 0,
+      act: game.act, coins: game.coins, frag: game.frag || 0, kills: game.kills, comboMax: game.comboMax || 0,
       flags: game.flags || {},
       p: {
         level: player.level, xp: player.xp, xpNext: player.xpNext,
@@ -2262,7 +2370,7 @@ function loadSave() {
 function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { } }
 function applySave(s) {
   game.flags = s.flags || {};
-  game.coins = s.coins || 0; game.kills = s.kills || 0; game.comboMax = s.comboMax || 0;
+  game.coins = s.coins || 0; game.frag = s.frag || 0; game.kills = s.kills || 0; game.comboMax = s.comboMax || 0;
   player = newPlayer();
   Object.assign(player, {
     level: s.p.level, xp: s.p.xp, xpNext: s.p.xpNext,
