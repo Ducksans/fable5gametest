@@ -1,0 +1,13 @@
+#!/bin/sh
+# 판교 더 서바이벌 — 커밋 전 반드리프트·반환각 가드 (fail-closed)
+# 이 훅이 exit 1이면 커밋은 성립하지 않는다. 기억이 아니라 기계가 강제한다.
+if ! command -v node >/dev/null 2>&1; then
+  echo "🔴 node 없음 — 가드 실행 불가 → 커밋 차단(fail-closed)."
+  exit 1
+fi
+node tools/guard.mjs || {
+  echo ""
+  echo "🔴 커밋 차단 — 판교 가드 실패. 고치고 다시 커밋하라."
+  echo "   (--no-verify 는 PROTOCOL.md에서 금지: 문서화된 비상시에만)"
+  exit 1
+}
