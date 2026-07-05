@@ -164,8 +164,13 @@ button:hover { background: #ffcf7d; }
 #resumeBtn { background: #7ee0a3; color: #0d1017; }
 #resumeBtn:hover { background: #9bedba; }
 .saveNote { font-size: 11px; color: #6a7690; margin-top: 2px; }
+#slotRow { display: flex; gap: 8px; }
+.slotBtn { font-size: 12px; padding: 5px 14px; border-radius: 6px; background: #232a3a; color: #aab3c5; border: 1px solid #3a4560; cursor: pointer; box-shadow: none; margin: 0; }
+.slotBtn.sel { background: #2a3346; color: #ffd88a; border-color: #ffb648; }
 #goTitle { color: #ff5b5b; text-shadow: 0 0 24px rgba(255,60,60,.5); }
 #goDesc { color: #aab3c5; font-size: 15px; }
 
-/* 좁은 화면 대비 */
-@media (max-width: 1500px) { body { justify-content: flex-start; } }
+/* 반응형 — 좁은 화면에서 IDE 셸 전체를 축소 (모바일 포함) */
+#ide { transform-origin: top center; }
+@media (max-width: 1500px) { body { justify-content: flex-start; overflow-x: hidden; } #ide { transform: scale(calc(100vw / 1462)); } }
+@media (max-height: 760px) { #ide { transform: scale(calc(100vh / 760)); } }

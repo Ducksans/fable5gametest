@@ -80,7 +80,7 @@ window.addEventListener('keyup', e => { keys[e.code] = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
   const r = canvas.getBoundingClientRect();
-  mouse.sx = e.clientX - r.left; mouse.sy = e.clientY - r.top;
+  mouse.sx = (e.clientX - r.left) * (W / r.width); mouse.sy = (e.clientY - r.top) * (H / r.height); // 스케일 보정(반응형)
   if (game.story) { if (e.button === 0) advanceStory(); return; }
   if (!game.running) return;
   if (game.panel) { if (e.button === 0) panelClick(mouse.sx, mouse.sy); return; }
@@ -93,7 +93,7 @@ canvas.addEventListener('mousedown', e => {
 });
 canvas.addEventListener('mousemove', e => {
   const r = canvas.getBoundingClientRect();
-  mouse.sx = e.clientX - r.left; mouse.sy = e.clientY - r.top;
+  mouse.sx = (e.clientX - r.left) * (W / r.width); mouse.sy = (e.clientY - r.top) * (H / r.height); // 스케일 보정(반응형)
   if (mouse.down && game.running) player.moveTarget = toWorld(mouse.sx, mouse.sy);
 });
 window.addEventListener('mouseup', () => { mouse.down = false; });
@@ -225,7 +225,7 @@ function newPlayer() {
     level: 1, xp: 0, xpNext: 30,
     invuln: 0, moveTarget: null,
     points: 0, tree: {},           // 스킬트리: {nodeId: rank}
-    inv: [], equip: {},            // 아이템: 인벤토리 배열, 슬롯별 장착
+    inv: [], equip: {}, stash: [],  // 아이템: 인벤(30)·장착·창고(60)
     // 캐릭터 정체성 (A)
     charName: '덕산', classId: 'necro', tint: '#f5f5f0', auraTint: '#c792ea',
     // 스탯 (B) — str 소환딜 · dex 공속/크리 · int 폭발딜/마나 · vit 최대HP
@@ -293,7 +293,7 @@ function resetGame(act) {
     focusTarget: null, bossDown: false, actClearT: 0,
     flags: act ? game.flags : {}, story: null, panel: null,
     combo: 0, comboT: 0, comboMax: act ? (game.comboMax || 0) : 0, hitstop: 0,
-    ach: game.ach || {}, hardcore: game.hardcore || false, dmgLog: [],
+    ach: game.ach || {}, hardcore: game.hardcore || false, dmgLog: [], lootMin: game.lootMin || 0,
   });
   dialogues = []; groundItems = []; zones = []; hazards = [];
   if (!player || !act) player = newPlayer();
@@ -308,22 +308,22 @@ function resetGame(act) {
 const SUMMON_DEFS = {
   golem: {  // AG 스톤 골렘 — UX/아키텍처 탱커 [E]
     name: 'AG 골렘', cost: 35, hp: 260, dmg: 11, speed: 85, r: 18,
-    range: 34, cooldown: 1.1, color: '#8a97b8', taunt: true, unique: true,
+    range: 34, cooldown: 1.1, color: '#8a97b8', taunt: true, unique: true, dmgType: 'phys',
     quote: 'AG 골렘 소환 — "방향은 내가 잡는다"',
   },
   warrior: { // CG 스켈레톤 워리어 — 백엔드 물리딜러 [Q]
     name: 'CG 워리어', cost: 30, hp: 110, dmg: 17, speed: 175, r: 12,
-    range: 30, cooldown: 0.45, color: '#7ee0a3', unique: true,
+    range: 30, cooldown: 0.45, color: '#7ee0a3', unique: true, dmgType: 'phys',
     quote: 'CG 워리어 소환 — "미친 타이핑 시작"',
   },
   mage: {   // GG 스켈레톤 메이지 — 무결성 드릴 원거리 [W]
     name: 'GG 메이지', cost: 30, hp: 70, dmg: 14, speed: 130, r: 11,
-    range: 300, cooldown: 0.9, color: '#c792ea', ranged: true, unique: true,
+    range: 300, cooldown: 0.9, color: '#c792ea', ranged: true, unique: true, dmgType: 'cold',
     quote: 'GG 메이지 소환 — "무결성 드릴 발사 준비"',
   },
   minion: { // 서브에이전트 스켈레톤 (로어 05 정본: HP 1, 유지 45초, 배치 쿨 3초)
     name: '서브에이전트', cost: 8, hp: 1, dmg: 7, speed: 190, r: 8,
-    range: 24, cooldown: 0.6, color: '#e8e0c8', duration: 45,
+    range: 24, cooldown: 0.6, color: '#e8e0c8', duration: 45, dmgType: 'phys',
   },
 };
 const MINION_CAP = 16;       // 로어 05/30: "동시 소환 캡 & fan-out 물량전" (하드 캡 — 정본)
@@ -354,6 +354,10 @@ const TREE = [
   { id: 'bicycle', br: 2, row: 1.9, name: '자전거 7년', max: 2, desc: '이동속도 +8%/랭크', stat: 'moveSpd', per: 0.08, req: 'grit' },
   { id: 'realtor', br: 2, row: 2.8, name: '부동산 화술', max: 2, desc: '커밋토큰 획득 +25%/랭크', stat: 'tokenGain', per: 0.25, req: 'caffeine' },
   { id: 'passpro', br: 2, row: 3.7, name: 'PASS 숙련', max: 2, desc: 'PASS 게이지 획득 +25%/랭크', stat: 'ultGain', per: 0.25, req: 'bicycle' },
+  // 심화 노드 (B)
+  { id: 'overclock', br: 0, row: 5.5, name: '오버클록', max: 2, desc: '소환수 데미지 +12%/랭크', stat: 'minionDmg', per: 0.12, req: 'trinity' },
+  { id: 'shrapnel2', br: 1, row: 5.5, name: 'manifest 산탄 II', max: 2, desc: '폭발 데미지 +18%/랭크', stat: 'boomDmg', per: 0.18, req: 'blueaxis' },
+  { id: 'realtor2', br: 2, row: 4.6, name: '이천 부동산왕', max: 2, desc: '최대 HP +25/랭크', stat: 'maxHp', per: 25, req: 'realtor' },
 ];
 const BRANCH_NAMES = ['소환계', '레거시 시학 (시체폭발)', '야인의 근성'];
 const BRANCH_COLORS = ['#7ee0a3', '#ffb648', '#9cc4ff'];
@@ -536,25 +540,30 @@ function equipItem(idx) {
 function unequipItem(slot) {
   const it = player.equip[slot];
   if (!it) return;
-  if (player.inv.length >= 24) { say('sys', '가방이 가득 찼다', 2); return; }
+  if (player.inv.length >= 30) { say('sys', '가방이 가득 찼다', 2); return; }
   delete player.equip[slot];
   player.inv.push(it);
   AudioSys.sfx.click();
   applyDerived();
   saveGame();
 }
+const RARITY_RANK = { normal: 0, gem: 1, magic: 1, rare: 2, unique: 3 };
 function pickupItem(g) {
-  if (player.inv.length >= 24) {
-    game.coins += 5;
-    say('sys', `가방 가득 — ${g.item.name} → 커밋토큰 5로 환전`, 2.5);
+  g.got = true;
+  const rc = RARITY[g.item.rarity];
+  // 루팅 필터 (C) — 기준 미만은 자동 판매(토큰)
+  if (!g.item.gem && RARITY_RANK[g.item.rarity] < (game.lootMin || 0)) { game.coins += 3; return; }
+  if (player.inv.length >= 30) {
+    // 가방 가득 → 창고(스태시)로 (C)
+    player.stash = player.stash || [];
+    if (player.stash.length < 60) { player.stash.push(g.item); say('sys', `가방 가득 — ${g.item.name} → 창고 보관 (${player.stash.length}/60)`, 2.5); }
+    else { game.coins += 5; say('sys', '창고도 가득 — 토큰 5로 환전', 2); }
   } else {
     player.inv.push(g.item);
-    const rc = RARITY[g.item.rarity];
     say('sys', `획득: ${g.item.name} [${rc.name}] — I키로 장착`, 3);
     if (g.item.rarity === 'unique') { AudioSys.sfx.levelup(); unlockAch('unique'); once('firstUnique', () => say('ducksan', '오... 이건 등기 칠 만한 물건이다.')); }
     else AudioSys.sfx.pickup();
   }
-  g.got = true;
   saveGame();
 }
 
@@ -639,7 +648,7 @@ function explodeCorpse(c, mult) {
   if (crit) addText(c.x, c.y - 20, '청축 크리! 찰칵!!', '#5bc8f7', 0.8);
   if (getStat('ground') > 0) zones.push({ x: c.x, y: c.y, t: 0, dur: 2, dps: dmg * 0.4 }); // 타건 장판
   for (const e of enemies) {
-    if (!e.dead && dist2(c, e) < 130 * 130) { damageEnemy(e, dmg, '#ffb648'); e.status = e.status || {}; e.status.burn = Math.max(e.status.burn || 0, 3); } // 화상
+    if (!e.dead && dist2(c, e) < 130 * 130) { damageEnemy(e, dmg, '#ffb648', { type: 'fire' }); e.status = e.status || {}; e.status.burn = Math.max(e.status.burn || 0, 3); } // 화상
   }
 }
 
@@ -703,8 +712,8 @@ function passDeclaration() {
 const ENEMY_DEFS = {
   nullptr: { name: '널포인터 슬라임', hp: 40, dmg: 6, speed: 60, r: 12, color: '#ff6b6b', xp: 12, coin: 2, label: 'null' },
   infloop: { name: '무한루프 도깨비불', hp: 9999, dmg: 4, speed: 78, r: 13, color: '#5bc8f7', xp: 25, coin: 3, label: 'for(;;)', orbit: true, wisp: true },
-  race:    { name: '레이스 컨디션', hp: 24, dmg: 12, speed: 165, r: 9, color: '#c792ea', xp: 9, coin: 2, label: 'race' },
-  elite:   { name: '머지 컨플릭트 정령', hp: 160, dmg: 14, speed: 90, r: 17, color: '#f7734b', xp: 40, coin: 8, label: '<<<<<<<', elite: true },
+  race:    { name: '레이스 컨디션', hp: 24, dmg: 12, speed: 165, r: 9, color: '#c792ea', xp: 9, coin: 2, label: 'race', resist: 'phys' },
+  elite:   { name: '머지 컨플릭트 정령', hp: 160, dmg: 14, speed: 90, r: 17, color: '#f7734b', xp: 40, coin: 8, label: '<<<<<<<', elite: true, resist: 'cold' },
   boss:    { name: '레거시 코드 골렘', hp: 1400, dmg: 24, speed: 55, r: 36, color: '#b8860b', xp: 200, coin: 60, label: 'LEGACY', boss: true },
 };
 
@@ -860,6 +869,8 @@ function damageEnemy(e, dmg, color, opts) {
     if (e.breakHits < 3) return;
     dmg = e.hp;
   }
+  // 데미지 타입 저항 (D)
+  if (opts.type && e.resist === opts.type && !opts.force) { dmg *= 0.6; addText(e.x, e.y - e.r - 18, '저항', '#9cc4ff', 0.5); }
   // 크리티컬 히트 (juice)
   let crit = false;
   if (!opts.force && !e.wisp && Math.random() < 0.12 + statFactor().critBonus) { dmg *= 1.7; crit = true; game.shake = Math.max(game.shake, 4); }
@@ -1044,10 +1055,10 @@ function update(dt) {
           projectiles.push({
             x: s.x, y: s.y,
             vx: (target.x - s.x) / d * 380, vy: (target.y - s.y) / d * 380,
-            dmg, life: 1.1, t: 0, color: s.color,
+            dmg, life: 1.1, t: 0, color: s.color, dtype: s.dmgType,
           });
         } else {
-          damageEnemy(target, dmg, s.color);
+          damageEnemy(target, dmg, s.color, { type: s.dmgType });
         }
       }
     } else {
@@ -1066,7 +1077,7 @@ function update(dt) {
     p.x += p.vx * dt; p.y += p.vy * dt;
     for (const e of enemies) {
       if (!e.dead && dist2(p, e) < (e.r + 6) * (e.r + 6)) {
-        damageEnemy(e, p.dmg, p.color, { drill: true });
+        damageEnemy(e, p.dmg, p.color, { drill: true, type: p.dtype });
         if (!e.dead) { e.status = e.status || {}; e.status.chill = Math.max(e.status.chill || 0, 2); } // GG 드릴 빙결
         p.t = 99; break;
       }
@@ -1851,7 +1862,7 @@ function drawHud() {
 const PANEL = { x: 70, y: 46, w: W - 140, h: H - 100 };
 function nodePos(n) {
   const colW = PANEL.w / 3;
-  return { x: PANEL.x + colW * (n.br + 0.5), y: PANEL.y + 86 + n.row * 76 };
+  return { x: PANEL.x + colW * (n.br + 0.5), y: PANEL.y + 78 + n.row * 68 };
 }
 function panelClick(sx, sy) {
   // 닫기 버튼
@@ -1868,11 +1879,15 @@ function panelClick(sx, sy) {
     }
   } else if (game.panel === 'inv') {
     if (invRerollBtn && sx > invRerollBtn.x && sx < invRerollBtn.x + invRerollBtn.w && sy > invRerollBtn.y && sy < invRerollBtn.y + invRerollBtn.h) { rerollRandomRare(3); return; }
+    if (invStashBtn && sx > invStashBtn.x && sx < invStashBtn.x + invStashBtn.w && sy > invStashBtn.y && sy < invStashBtn.y + invStashBtn.h) {
+      if (player.stash && player.stash.length && player.inv.length < 30) { player.inv.push(player.stash.pop()); AudioSys.sfx.click(); saveGame(); } return;
+    }
+    if (invFilterBtn && sx > invFilterBtn.x && sx < invFilterBtn.x + invFilterBtn.w && sy > invFilterBtn.y && sy < invFilterBtn.y + invFilterBtn.h) { game.lootMin = ((game.lootMin || 0) + 1) % 3; AudioSys.sfx.click(); saveGame(); return; }
     for (let i = 0; i < SLOTS.length; i++) {
       const p = equipSlotPos(i);
       if (sx > p.x && sx < p.x + 52 && sy > p.y && sy < p.y + 52) { unequipItem(SLOTS[i]); return; }
     }
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 30; i++) {
       const p = invCellPos(i);
       if (sx > p.x && sx < p.x + 46 && sy > p.y && sy < p.y + 46) { equipItem(i); return; }
     }
@@ -1884,7 +1899,7 @@ function equipSlotPos(i) {
 function invCellPos(i) {
   return { x: PANEL.x + 250 + (i % 6) * 52, y: PANEL.y + 92 + Math.floor(i / 6) * 52 };
 }
-let invRerollBtn = null;
+let invRerollBtn = null, invStashBtn = null, invFilterBtn = null;
 function drawPanelFrame(title, sub) {
   ctx.fillStyle = 'rgba(5,7,12,0.93)';
   ctx.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
@@ -2113,7 +2128,7 @@ function shopRowY(i) { return PANEL.y + 96 + i * 46; }
 function shopBuy(it) {
   const have = it.cur === 'coins' ? game.coins : (game.frag || 0);
   if (have < it.cost) { say('sys', `${it.cur === 'coins' ? '커밋토큰' : '무결성 파편'} 부족`, 2); return; }
-  if (it.id === 'item' || it.id === 'unique' || it.id === 'gem') { if (player.inv.length >= 24) { say('sys', '가방이 가득 찼다', 2); return; } }
+  if (it.id === 'item' || it.id === 'unique' || it.id === 'gem') { if (player.inv.length >= 30) { say('sys', '가방이 가득 찼다', 2); return; } }
   if (it.cur === 'coins') game.coins -= it.cost; else game.frag -= it.cost;
   if (it.id === 'refill') { player.potions.forEach((p) => p.charges = p.max); }
   else if (it.id === 'item') player.inv.push(rollItem('rare'));
@@ -2304,9 +2319,22 @@ function drawInvPanel() {
   ctx.fillStyle = (game.frag || 0) >= 3 ? '#9bedba' : '#59616f'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('↻ 랜덤 레어/매직 리롤 (무결성 파편 3)', rb.x + rb.w / 2, rb.y + 17);
   invRerollBtn = rb;
+  // 창고·필터 버튼 (C)
+  const stashN = (player.stash || []).length;
+  const sb2 = { x: PANEL.x + 250, y: PANEL.y + PANEL.h - 76, w: 96, h: 26 };
+  ctx.fillStyle = stashN > 0 ? '#2a3550' : '#1c2230'; ctx.fillRect(sb2.x, sb2.y, sb2.w, sb2.h);
+  ctx.strokeStyle = '#5b8def'; ctx.strokeRect(sb2.x, sb2.y, sb2.w, sb2.h);
+  ctx.fillStyle = '#9cc4ff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(`📦 창고 ${stashN}/60 꺼내기`, sb2.x + sb2.w / 2, sb2.y + 17);
+  const fb = { x: PANEL.x + 354, y: PANEL.y + PANEL.h - 76, w: 96, h: 26 };
+  const fNames = ['전체', '매직↑', '레어↑'];
+  ctx.fillStyle = '#2a3550'; ctx.fillRect(fb.x, fb.y, fb.w, fb.h);
+  ctx.strokeStyle = '#c792ea'; ctx.strokeRect(fb.x, fb.y, fb.w, fb.h);
+  ctx.fillStyle = '#e0b3ff'; ctx.fillText(`🔎 필터: ${fNames[game.lootMin || 0]}`, fb.x + fb.w / 2, fb.y + 17);
+  invStashBtn = sb2; invFilterBtn = fb;
   // 가방 셀
   ctx.textAlign = 'center';
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < 30; i++) {
     const p = invCellPos(i);
     const it = player.inv[i];
     ctx.fillStyle = 'rgba(28,34,52,0.9)';
@@ -2569,11 +2597,32 @@ function render() {
   ctx.restore();
 }
 
+// ---------- 게임패드 (G) — 좌스틱 이동 + 버튼 스킬 ----------
+let padPrev = [];
+function pollGamepad() {
+  if (!game.running || game.panel || game.story) return;
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const gp = pads && pads[0];
+  if (!gp) return;
+  const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+  if (Math.hypot(ax, ay) > 0.25) { player.moveTarget = { x: clamp(player.x + ax * 200, 30, WORLD - 30), y: clamp(player.y + ay * 200, 30, WORLD - 30) }; }
+  const map = { 0: 'Space', 1: 'KeyF', 2: 'KeyQ', 3: 'KeyW', 4: 'KeyE', 5: 'KeyR' };
+  gp.buttons.forEach((b, i) => {
+    const pressed = b.pressed && !padPrev[i];
+    if (pressed) {
+      if (map[i] === 'KeyF') doDash();
+      else if (map[i]) castSkill(map[i]);
+    }
+    padPrev[i] = b.pressed;
+  });
+}
+
 // ---------- 루프 ----------
 let last = 0;
 function loop(ts) {
   const dt = Math.min((ts - last) / 1000, 0.05);
   last = ts;
+  pollGamepad();
   if (game.story) game.story.t += dt;
   if (game.hitstop > 0) game.hitstop -= dt;      // 히트스톱: 짧은 정지 (타격감)
   else if (game.running && !game.panel) update(dt); // 패널 열림 = 일시정지
@@ -2591,18 +2640,19 @@ requestAnimationFrame(loop);
    진행(레벨·XP·스킬트리·아이템·ACT·커밋토큰)을 localStorage에 박제.
    새로고침·탭 닫기에도 이어진다. 라이브 런(적/위치)은 재생성.
    ============================================================ */
-const SAVE_KEY = 'pangyo-survival-save-v1';
+let saveSlot = 1;
+function SAVE_KEY() { return 'pangyo-survival-save-v1-s' + saveSlot; }
 function saveGame() {
   if (!player || !game.running) return;
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
+    localStorage.setItem(SAVE_KEY(), JSON.stringify({
       v: 1, ts: Date.now(),
       act: game.act, tier: game.tier || 1, coins: game.coins, frag: game.frag || 0, kills: game.kills, comboMax: game.comboMax || 0,
-      flags: game.flags || {}, ach: game.ach || {}, hardcore: !!game.hardcore,
+      flags: game.flags || {}, ach: game.ach || {}, hardcore: !!game.hardcore, lootMin: game.lootMin || 0,
       p: {
         level: player.level, xp: player.xp, xpNext: player.xpNext,
         baseMaxHp: player.baseMaxHp, baseMaxMana: player.baseMaxMana, baseManaRegen: player.baseManaRegen,
-        points: player.points, tree: player.tree, inv: player.inv, equip: player.equip,
+        points: player.points, tree: player.tree, inv: player.inv, equip: player.equip, stash: player.stash || [],
         charName: player.charName, classId: player.classId, tint: player.tint, auraTint: player.auraTint,
         stats: player.stats, statPoints: player.statPoints, potions: player.potions,
       },
@@ -2612,20 +2662,20 @@ function saveGame() {
 }
 function loadSave() {
   try {
-    const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY()) || 'null');
     return (s && s.v === 1 && s.p) ? s : null;
   } catch (e) { return null; }
 }
-function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { } }
+function clearSave() { try { localStorage.removeItem(SAVE_KEY()); } catch (e) { } }
 function applySave(s) {
   game.flags = s.flags || {};
-  game.tier = s.tier || 1; game.ach = s.ach || {}; game.hardcore = !!s.hardcore;
+  game.tier = s.tier || 1; game.ach = s.ach || {}; game.hardcore = !!s.hardcore; game.lootMin = s.lootMin || 0;
   game.coins = s.coins || 0; game.frag = s.frag || 0; game.kills = s.kills || 0; game.comboMax = s.comboMax || 0;
   player = newPlayer();
   Object.assign(player, {
     level: s.p.level, xp: s.p.xp, xpNext: s.p.xpNext,
     baseMaxHp: s.p.baseMaxHp, baseMaxMana: s.p.baseMaxMana || 100, baseManaRegen: s.p.baseManaRegen,
-    points: s.p.points, tree: s.p.tree || {}, inv: s.p.inv || [], equip: s.p.equip || {},
+    points: s.p.points, tree: s.p.tree || {}, inv: s.p.inv || [], equip: s.p.equip || {}, stash: s.p.stash || [],
     charName: s.p.charName || '덕산', classId: s.p.classId || 'necro',
     tint: s.p.tint || '#f5f5f0', auraTint: s.p.auraTint || '#c792ea',
     stats: s.p.stats || { str: 5, dex: 5, int: 5, vit: 5 }, statPoints: s.p.statPoints || 0,
@@ -2693,16 +2743,29 @@ function currentDPS() {
 window.addEventListener('beforeunload', () => { saveGame(); saveCareer(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveGame(); saveCareer(); } });
 
-// 타이틀에 저장이 있으면 '이어하기' 노출
-(function initTitleSave() {
+// 타이틀 — 저장 슬롯 3개 (A) + '이어하기' 노출
+function refreshTitleSave() {
   const s = loadSave();
   const rb = document.getElementById('resumeBtn');
   const sb2 = document.getElementById('startBtn');
-  if (s && rb) {
-    rb.textContent = `▶ 이어하기 — Lv.${s.p.level} · ACT ${s.act}`;
-    rb.classList.remove('hidden');
-    if (sb2) sb2.textContent = '새로 시작 (저장 삭제)';
+  if (s && rb) { rb.textContent = `▶ 이어하기 — ${s.p.charName || '덕산'} Lv.${s.p.level} · ACT ${s.act}`; rb.classList.remove('hidden'); if (sb2) sb2.textContent = '새 캐릭터 (이 슬롯 삭제)'; }
+  else if (rb) { rb.classList.add('hidden'); if (sb2) sb2.textContent = '판교역 3번 출구로 강림'; }
+}
+(function initSlots() {
+  const row = document.getElementById('slotRow');
+  if (!row) return;
+  for (let n = 1; n <= 3; n++) {
+    const b = document.createElement('button');
+    b.className = 'slotBtn' + (n === saveSlot ? ' sel' : '');
+    b.textContent = `슬롯 ${n}`;
+    b.addEventListener('click', () => {
+      saveSlot = n;
+      [...row.children].forEach((c, i) => c.classList.toggle('sel', i + 1 === n));
+      refreshTitleSave();
+    });
+    row.appendChild(b);
   }
+  refreshTitleSave();
 })();
 
 document.getElementById('resumeBtn').addEventListener('click', () => {
