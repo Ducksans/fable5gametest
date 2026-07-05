@@ -42,6 +42,17 @@ window.addEventListener('keydown', e => {
     if (game.running) say('sys', on ? 'BGM ON — 판교의 밤 로파이' : 'BGM OFF', 2);
     return;
   }
+  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'Escape')) {
+    e.preventDefault();
+    if (e.code === 'Escape') game.panel = null;
+    else {
+      const p = e.code === 'KeyT' ? 'tree' : 'inv';
+      game.panel = game.panel === p ? null : p;
+      AudioSys.sfx.click();
+    }
+    return;
+  }
+  if (game.panel) return; // 패널 열림 중엔 전투 스킬 잠금
   if (['Space', 'KeyQ', 'KeyW', 'KeyE', 'KeyR'].includes(e.code)) {
     e.preventDefault();
     if (game.running) castSkill(e.code);
@@ -54,6 +65,7 @@ canvas.addEventListener('mousedown', e => {
   mouse.sx = e.clientX - r.left; mouse.sy = e.clientY - r.top;
   if (game.story) { if (e.button === 0) advanceStory(); return; }
   if (!game.running) return;
+  if (game.panel) { if (e.button === 0) panelClick(mouse.sx, mouse.sy); return; }
   if (e.button === 0) {
     mouse.down = true;
     leftCommand();
@@ -92,6 +104,8 @@ const game = {};
 let player, summons, enemies, projectiles, corpses, particles, orbs, texts, decos;
 let minionBatchCd = 0;
 let dialogues = []; // {speaker, color, text, t, life}
+let groundItems = []; // 바닥 드랍템 {x, y, item}
+let zones = [];       // 타건 장판 {x, y, t, dur, dps}
 
 // ---------- 대사 시스템 (로어 기반 스토리) ----------
 const SPEAKERS = {
@@ -136,11 +150,13 @@ function advanceStory() {
 function newPlayer() {
   return {
     x: 320, y: 320, r: 14,
-    hp: 120, maxHp: 120,
-    mana: 100, maxMana: 100, manaRegen: 9,
-    speed: 195,
+    hp: 120, maxHp: 120, baseMaxHp: 120,
+    mana: 100, maxMana: 100, manaRegen: 9, baseManaRegen: 9,
+    speed: 195, baseSpeed: 195,
     level: 1, xp: 0, xpNext: 30,
     invuln: 0, moveTarget: null,
+    points: 0, tree: {},           // 스킬트리: {nodeId: rank}
+    inv: [], equip: {},            // 아이템: 인벤토리 배열, 슬롯별 장착
   };
 }
 
@@ -151,9 +167,9 @@ function resetGame(act) {
     kills: act ? game.kills : 0, coins: act ? (game.coins || 0) : 0,
     ultGauge: 0, banner: null, shake: 0,
     focusTarget: null, bossDown: false, actClearT: 0,
-    flags: act ? game.flags : {}, story: null,
+    flags: act ? game.flags : {}, story: null, panel: null,
   });
-  dialogues = [];
+  dialogues = []; groundItems = []; zones = [];
   if (!player || !act) player = newPlayer();
   player.x = 320; player.y = 320; player.moveTarget = null;
   summons = []; enemies = []; projectiles = [];
@@ -184,12 +200,169 @@ const SUMMON_DEFS = {
     range: 24, cooldown: 0.6, color: '#e8e0c8', duration: 45,
   },
 };
-const MINION_CAP = 16;       // 로어 05/30: "동시 소환 캡 & fan-out 물량전"
+const MINION_CAP = 16;       // 로어 05/30: "동시 소환 캡 & fan-out 물량전" (하드 캡 — 정본)
 const MINION_BATCH_CD = 3;   // 로어 05/30: 배치당 3초
+
+/* ============================================================
+   스킬트리 (로어 06 소환계 · 로어 07 레거시 시학 · 덕산 본체)
+   레벨업마다 포인트 1 — T키로 열고 클릭 분배
+   ============================================================ */
+const TREE = [
+  // A: 소환계 (Summon Tree)
+  { id: 'aura', br: 0, row: 0, name: '군단장 오라', max: 3, desc: '소환수 이속/공속 +8%/랭크 (로어 06)', stat: 'auraSpd', per: 0.08 },
+  { id: 'surge', br: 0, row: 1, name: '군단 증폭', max: 3, desc: '소환수 데미지 +10%/랭크 · 직렬 PR 룰', stat: 'minionDmg', per: 0.10, req: 'aura' },
+  { id: 'bone', br: 0, row: 1.9, name: '뼈다귀 보강', max: 3, desc: '소환수 HP +15%/랭크', stat: 'minionHp', per: 0.15, req: 'aura' },
+  { id: 'fanout', br: 0, row: 2.8, name: '팬아웃 소환', max: 1, desc: 'Space 웨이브 4기 → 6기 동시 소환', stat: 'fanout', per: 1, req: 'surge' },
+  { id: 'doppel', br: 0, row: 3.7, name: '1인2역 환영술', max: 1, desc: 'AG 소환 시 환영 골렘 1기 추가 (50% 스탯)', stat: 'doppel', per: 1, req: 'bone' },
+  { id: 'trinity', br: 0, row: 4.6, name: '삼금강 각성', max: 1, desc: 'CG·GG·AG 전원 생존 시 소환수 데미지 +30%', stat: 'trinity', per: 1, req: 'fanout' },
+  // B: 시체폭발 — 레거시 시학 (Legacy Poetics)
+  { id: 'boomdmg', br: 1, row: 0, name: '폭발 증폭', max: 3, desc: '키보드 폭발 데미지 +20%/랭크', stat: 'boomDmg', per: 0.20 },
+  { id: 'boomrad', br: 1, row: 1, name: '폭발 반경', max: 2, desc: '폭발 반경 +15%/랭크', stat: 'boomRadius', per: 0.15, req: 'boomdmg' },
+  { id: 'buckshot', br: 1, row: 1.9, name: 'manifest 산탄', max: 1, desc: '키캡 파편 +8발 · 데미지 +15% (격자 탄착군)', stat: 'buckshot', per: 1, req: 'boomdmg' },
+  { id: 'chain', br: 1, row: 2.8, name: '연쇄폭발', max: 3, desc: '폭발 킬 → 자동 연쇄 (랭크 = 연쇄 상한, max3 fail-closed)', stat: 'chainCap', per: 1, req: 'boomrad' },
+  { id: 'ground', br: 1, row: 3.7, name: '타건 장판', max: 1, desc: '폭발 지점에 2초 DPS존 (초당 폭발딜 40%)', stat: 'ground', per: 1, req: 'buckshot' },
+  { id: 'blueaxis', br: 1, row: 4.6, name: '청축 각성', max: 1, desc: '폭발 크리티컬 30% 확률 · 1.5배 (감사 스캔 확정 크리)', stat: 'crit', per: 1, req: 'chain' },
+  // C: 야인의 근성 (덕산 본체)
+  { id: 'grit', br: 2, row: 0, name: '산전수전', max: 3, desc: '최대 HP +20/랭크 (부동산 7년)', stat: 'maxHp', per: 20 },
+  { id: 'caffeine', br: 2, row: 1, name: '카페인 혈관', max: 3, desc: '아메리카노 재생 +2/랭크', stat: 'manaRegen', per: 2, req: 'grit' },
+  { id: 'bicycle', br: 2, row: 1.9, name: '자전거 7년', max: 2, desc: '이동속도 +8%/랭크', stat: 'moveSpd', per: 0.08, req: 'grit' },
+  { id: 'realtor', br: 2, row: 2.8, name: '부동산 화술', max: 2, desc: '커밋토큰 획득 +25%/랭크', stat: 'tokenGain', per: 0.25, req: 'caffeine' },
+  { id: 'passpro', br: 2, row: 3.7, name: 'PASS 숙련', max: 2, desc: 'PASS 게이지 획득 +25%/랭크', stat: 'ultGain', per: 0.25, req: 'bicycle' },
+];
+const BRANCH_NAMES = ['소환계', '레거시 시학 (시체폭발)', '야인의 근성'];
+const BRANCH_COLORS = ['#7ee0a3', '#ffb648', '#9cc4ff'];
+
+/* ============================================================
+   아이템 시스템 (POE식 등급 + 랜덤 어픽스)
+   등급: 일반(0옵) → 매직(1~2옵) → 레어(3~4옵) → 유니크(고정 명품)
+   ============================================================ */
+const SLOTS = ['weapon', 'body', 'head', 'amulet', 'ring', 'charm'];
+const SLOT_NAMES = { weapon: '무기', body: '상의', head: '머리', amulet: '목걸이', ring: '반지', charm: '부적' };
+const BASES = [
+  { slot: 'weapon', name: '청테이프 키보드' }, { slot: 'weapon', name: '멤브레인 키보드' },
+  { slot: 'body', name: '늘어난 런닝셔츠' }, { slot: 'body', name: '판교 후드집업' },
+  { slot: 'head', name: '유선 이어폰' }, { slot: 'head', name: '싸구려 헤드셋' },
+  { slot: 'amulet', name: 'receipt 목걸이' }, { slot: 'ring', name: '멱등 반지' }, { slot: 'charm', name: 'dev키 부적' },
+];
+const AFFIXES = [
+  { key: 'minionDmg', name: '소환수 데미지', lo: 0.05, hi: 0.15, pct: true },
+  { key: 'minionHp', name: '소환수 HP', lo: 0.10, hi: 0.30, pct: true },
+  { key: 'boomDmg', name: '폭발 데미지', lo: 0.08, hi: 0.25, pct: true },
+  { key: 'maxHp', name: '최대 HP', lo: 10, hi: 40, pct: false },
+  { key: 'manaRegen', name: '아메리카노 재생', lo: 1, hi: 3, pct: false },
+  { key: 'moveSpd', name: '이동속도', lo: 0.04, hi: 0.10, pct: true },
+  { key: 'tokenGain', name: '커밋토큰 획득', lo: 0.10, hi: 0.30, pct: true },
+  { key: 'ultGain', name: 'PASS 게이지 획득', lo: 0.10, hi: 0.25, pct: true },
+];
+const UNIQUES = [
+  { slot: 'weapon', name: '기계식 키보드', quote: '"손가락이 아프지만 버그도 아프다"', affixes: [{ key: 'minionDmg', v: 0.25 }, { key: 'boomDmg', v: 0.30 }] },
+  { slot: 'charm', name: '휘발된 라이브 서명키', quote: '"파일 부재 ≠ 휘발. 위치를 잊었을 뿐."', affixes: [{ key: 'minionHp', v: 0.40 }, { key: 'manaRegen', v: 2 }] },
+  { slot: 'ring', name: '80라운드 회고의 반지', quote: '소환 마나 소모 -20% 영구', affixes: [{ key: 'summonCost', v: -0.20 }, { key: 'ultGain', v: 0.20 }] },
+  { slot: 'body', name: '터틀넥 오브 판교', quote: 'IT 힙스터의 정장', affixes: [{ key: 'maxHp', v: 60 }, { key: 'moveSpd', v: 0.05 }] },
+];
+const RARITY = { normal: { name: '일반', color: '#d5dbe8' }, magic: { name: '매직', color: '#6b9bff' }, rare: { name: '레어', color: '#ffd700' }, unique: { name: '유니크', color: '#f7734b' } };
+
+function rollItem(forceRarity) {
+  const roll = Math.random();
+  let rarity = forceRarity || (roll < 0.5 ? 'normal' : roll < 0.85 ? 'magic' : 'rare');
+  if (rarity === 'unique') {
+    const u = UNIQUES[Math.floor(rand(0, UNIQUES.length))];
+    return { ...u, rarity: 'unique', affixes: u.affixes.map(a => ({ ...a })) };
+  }
+  const base = BASES[Math.floor(rand(0, BASES.length))];
+  const n = rarity === 'normal' ? 0 : rarity === 'magic' ? (Math.random() < 0.5 ? 1 : 2) : (Math.random() < 0.5 ? 3 : 4);
+  const pool = [...AFFIXES].sort(() => Math.random() - 0.5).slice(0, n);
+  const affixes = pool.map(a => ({ key: a.key, v: a.pct ? +rand(a.lo, a.hi).toFixed(2) : Math.round(rand(a.lo, a.hi)) }));
+  const prefix = rarity === 'rare' ? ['판교의 ', '야근한 ', '리팩토링된 ', '무결성 '][Math.floor(rand(0, 4))] : '';
+  return { slot: base.slot, name: prefix + base.name, rarity, affixes };
+}
+
+function dropItem(x, y, forceRarity) {
+  const item = rollItem(forceRarity);
+  groundItems.push({ x: x + rand(-20, 20), y: y + rand(-20, 20), item });
+}
+
+function affixLabel(a) {
+  const def = AFFIXES.find(d => d.key === a.key);
+  if (a.key === 'summonCost') return `소환 마나 소모 ${Math.round(a.v * 100)}%`;
+  if (!def) return a.key;
+  return def.pct ? `${def.name} +${Math.round(a.v * 100)}%` : `${def.name} +${a.v}`;
+}
+
+// ---------- 스탯 집계: 트리 + 장비 ----------
+function getStat(key) {
+  let v = 0;
+  for (const n of TREE) {
+    const r = player.tree[n.id] || 0;
+    if (r > 0 && n.stat === key) v += n.per * r;
+  }
+  for (const s of SLOTS) {
+    const it = player.equip[s];
+    if (it) for (const a of it.affixes) if (a.key === key) v += a.v;
+  }
+  return v;
+}
+function applyDerived() {
+  const ratio = player.hp / player.maxHp;
+  player.maxHp = Math.round(player.baseMaxHp + getStat('maxHp'));
+  player.hp = Math.min(player.maxHp, Math.max(1, Math.round(player.maxHp * ratio)));
+  player.manaRegen = player.baseManaRegen + getStat('manaRegen');
+  player.speed = player.baseSpeed * (1 + getStat('moveSpd'));
+}
+function minionDmgFactor() {
+  let f = 1 + getStat('minionDmg');
+  if (getStat('trinity') > 0 &&
+      summons.some(s => s.type === 'warrior') && summons.some(s => s.type === 'mage') && summons.some(s => s.type === 'golem')) f *= 1.3;
+  return f;
+}
+
+// ---------- 트리/장비 조작 ----------
+function allocNode(n) {
+  const r = player.tree[n.id] || 0;
+  if (player.points <= 0 || r >= n.max) return;
+  if (n.req && !(player.tree[n.req] > 0)) { say('sys', `선행 노드 필요: ${TREE.find(t => t.id === n.req).name}`, 2.5); return; }
+  player.tree[n.id] = r + 1;
+  player.points--;
+  AudioSys.sfx.levelup();
+  say('sys', `[${n.name}] Lv.${r + 1} 습득`, 3);
+  applyDerived();
+}
+function equipItem(idx) {
+  const it = player.inv[idx];
+  if (!it) return;
+  const prev = player.equip[it.slot];
+  player.equip[it.slot] = it;
+  player.inv.splice(idx, 1);
+  if (prev) player.inv.push(prev);
+  AudioSys.sfx.click();
+  applyDerived();
+}
+function unequipItem(slot) {
+  const it = player.equip[slot];
+  if (!it) return;
+  if (player.inv.length >= 24) { say('sys', '가방이 가득 찼다', 2); return; }
+  delete player.equip[slot];
+  player.inv.push(it);
+  AudioSys.sfx.click();
+  applyDerived();
+}
+function pickupItem(g) {
+  if (player.inv.length >= 24) {
+    game.coins += 5;
+    say('sys', `가방 가득 — ${g.item.name} → 커밋토큰 5로 환전`, 2.5);
+  } else {
+    player.inv.push(g.item);
+    const rc = RARITY[g.item.rarity];
+    say('sys', `획득: ${g.item.name} [${rc.name}] — I키로 장착`, 3);
+    if (g.item.rarity === 'unique') { AudioSys.sfx.levelup(); once('firstUnique', () => say('ducksan', '오... 이건 등기 칠 만한 물건이다.')); }
+    else AudioSys.sfx.pickup();
+  }
+  g.got = true;
+}
 
 function summon(type) {
   const d = SUMMON_DEFS[type];
-  if (d.unique && summons.some(s => s.type === type && s.hp > 0)) {
+  if (d.unique && summons.some(s => s.type === type && s.hp > 0 && !s.phantom)) {
     addText(player.x, player.y - 30, '이미 소환됨!', '#ff9c9c'); return;
   }
   if (type === 'minion') {
@@ -198,14 +371,26 @@ function summon(type) {
       addText(player.x, player.y - 30, `캡 도달 (${MINION_CAP}) — 웨이브로 굴려라!`, '#ff9c9c'); return;
     }
   }
-  if (player.mana < d.cost) { addText(player.x, player.y - 30, '아메리카노 부족! (마나)', '#9cc4ff'); return; }
-  player.mana -= d.cost;
+  const cost = Math.round(d.cost * (1 + getStat('summonCost')));
+  if (player.mana < cost) { addText(player.x, player.y - 30, '아메리카노 부족! (마나)', '#9cc4ff'); return; }
+  player.mana -= cost;
   const a = rand(0, Math.PI * 2);
+  const hpMul = 1 + getStat('minionHp');
   summons.push({
     type, ...d,
     x: player.x + Math.cos(a) * 46, y: player.y + Math.sin(a) * 46,
-    maxHp: d.hp, atkTimer: 0, lifeLeft: d.duration || Infinity,
+    hp: d.hp * hpMul, maxHp: d.hp * hpMul, atkTimer: 0, lifeLeft: d.duration || Infinity,
   });
+  // 1인2역 환영술 (로어 06/10): AG 소환 시 환영 골렘 추가
+  if (type === 'golem' && getStat('doppel') > 0) {
+    summons.push({
+      ...d, type: 'golem', name: '환영 골렘', unique: false, taunt: false, phantom: true,
+      x: player.x - Math.cos(a) * 46, y: player.y - Math.sin(a) * 46,
+      hp: d.hp * 0.5 * hpMul, maxHp: d.hp * 0.5 * hpMul, dmg: d.dmg * 0.5,
+      atkTimer: 0, lifeLeft: Infinity,
+    });
+    once('doppelSeen', () => say('ducksan', '어? 너 둘이야? 아까 한 마리 아니었어?'));
+  }
   if (d.quote) addText(player.x, player.y - 46, d.quote, '#ffd88a');
   spawnRing(player.x, player.y, d.color);
   if (type === 'minion') AudioSys.sfx.minion(); else AudioSys.sfx.summon();
@@ -226,35 +411,55 @@ function castSkill(code) {
       addText(player.x, player.y - 30, `배치 쿨타임 ${minionBatchCd.toFixed(1)}초`, '#ff9c9c');
     } else {
       const before = summons.filter(s => s.type === 'minion').length;
-      for (let i = 0; i < 4; i++) summon('minion');
+      const wave = 4 + (getStat('fanout') > 0 ? 2 : 0); // 팬아웃 소환 (로어 06)
+      for (let i = 0; i < wave; i++) summon('minion');
       if (summons.filter(s => s.type === 'minion').length > before) minionBatchCd = MINION_BATCH_CD;
     }
   }
   if (code === 'KeyR') passDeclaration();
 }
 
-// ---------- 키보드 폭발 (로어 07: Corpse Explosion — 커서 지정) ----------
+// ---------- 키보드 폭발 (로어 07: Corpse Explosion — 커서 지정 + 연쇄) ----------
+function explodeCorpse(c, mult) {
+  c.used = true;
+  const buck = getStat('buckshot') > 0;
+  let dmg = (32 + player.level * 6) * (1 + getStat('boomDmg')) * (buck ? 1.15 : 1) * mult;
+  let crit = false;
+  if (getStat('crit') > 0 && Math.random() < 0.3) { dmg *= 1.5; crit = true; } // 청축 각성
+  const shrapnel = 14 + (buck ? 8 : 0);
+  for (let i = 0; i < shrapnel; i++) {
+    const a = rand(0, Math.PI * 2), sp = rand(60, 220);
+    particles.push({
+      x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      z: 8, vz: rand(80, 220),
+      life: rand(0.5, 1.0), t: 0, kind: 'keycap',
+      ch: KEYCAPS[Math.floor(rand(0, KEYCAPS.length))],
+      color: crit ? '#5bc8f7' : ['#ffd88a', '#7ee0a3', '#c792ea', '#9cc4ff'][Math.floor(rand(0, 4))],
+    });
+  }
+  spawnRing(c.x, c.y, crit ? '#5bc8f7' : '#ffb648');
+  if (crit) addText(c.x, c.y - 20, '청축 크리! 찰칵!!', '#5bc8f7', 0.8);
+  if (getStat('ground') > 0) zones.push({ x: c.x, y: c.y, t: 0, dur: 2, dps: dmg * 0.4 }); // 타건 장판
+  for (const e of enemies) {
+    if (!e.dead && dist2(c, e) < 130 * 130) damageEnemy(e, dmg, '#ffb648');
+  }
+}
+
 function corpseExplosion(at) {
-  const R = 170, DMG = 32 + player.level * 6;
+  const R = 170 * (1 + getStat('boomRadius'));
   let used = 0;
-  for (const c of corpses) {
-    if (c.used) continue;
-    if (dist2(c, at) < R * R) {
-      c.used = true; used++;
-      for (let i = 0; i < 14; i++) {
-        const a = rand(0, Math.PI * 2), sp = rand(60, 220);
-        particles.push({
-          x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-          z: 8, vz: rand(80, 220),
-          life: rand(0.5, 1.0), t: 0, kind: 'keycap',
-          ch: KEYCAPS[Math.floor(rand(0, KEYCAPS.length))],
-          color: ['#ffd88a', '#7ee0a3', '#c792ea', '#9cc4ff'][Math.floor(rand(0, 4))],
-        });
-      }
-      spawnRing(c.x, c.y, '#ffb648');
-      for (const e of enemies) {
-        if (dist2(c, e) < 130 * 130) damageEnemy(e, DMG, '#ffb648');
-      }
+  const chainCap = getStat('chainCap'); // 연쇄 상한 max3 — fail-closed (로어 07 정본)
+  let wave = corpses.filter(c => !c.used && dist2(c, at) < R * R);
+  let depth = 0, mult = 1;
+  while (wave.length > 0 && depth <= chainCap) {
+    const beforeLen = corpses.length;
+    for (const c of wave) { explodeCorpse(c, mult); used++; }
+    const fresh = corpses.slice(beforeLen).filter(c => !c.used); // 폭발 킬로 생긴 새 시체
+    depth++; mult *= 0.7; // 연쇄 감쇠 (정본: 100% → 70% → 49%)
+    wave = depth <= chainCap ? fresh : [];
+    if (depth === 3 && fresh.length > 0) {
+      addText(at.x, at.y - 60, 'MERGED! 3연쇄 풀콤보!!', '#ffd700', 1.4);
+      once('fullCombo', () => say('ducksan', '3연쇄 머지 완료. 이 맛에 시체폭발 트리 찍는 거다.'));
     }
   }
   if (used > 0) {
@@ -368,12 +573,16 @@ function damageEnemy(e, dmg, color, opts) {
     e.dead = true;
     game.kills++;
     AudioSys.sfx.kill();
-    game.ultGauge = Math.min(100, game.ultGauge + (e.boss ? 40 : e.elite ? 12 : 5));
+    game.ultGauge = Math.min(100, game.ultGauge + (e.boss ? 40 : e.elite ? 12 : 5) * (1 + getStat('ultGain')));
     corpses.push({ x: e.x, y: e.y, t: 0, boss: !!e.boss });
     const drops = e.boss ? 10 : e.elite ? 4 : 2;
     for (let i = 0; i < drops; i++) {
       orbs.push({ x: e.x + rand(-16, 16), y: e.y + rand(-16, 16), kind: i % 2 ? 'coin' : 'xp', v: e.boss ? 10 : e.elite ? 5 : 3 });
     }
+    // POE식 아이템 드랍
+    if (e.boss) { dropItem(e.x, e.y, 'rare'); dropItem(e.x, e.y, 'rare'); if (Math.random() < 0.5) dropItem(e.x, e.y, 'unique'); }
+    else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); }
+    else if (Math.random() < 0.07) dropItem(e.x, e.y);
     if (game.focusTarget === e) game.focusTarget = null;
     if (e.boss) {
       game.bossDown = true;
@@ -393,10 +602,14 @@ function gainXp(v) {
     player.xp -= player.xpNext;
     player.level++;
     player.xpNext = Math.floor(player.xpNext * 1.35);
-    player.maxHp += 14; player.hp = player.maxHp;
+    player.baseMaxHp += 14;
     player.maxMana += 8; player.mana = player.maxMana;
+    player.points++;
+    applyDerived();
+    player.hp = player.maxHp;
     AudioSys.sfx.levelup();
-    setBanner(`LEVEL UP! Lv.${player.level}`, '바이브 코딩 숙련도 상승 — 소환수 강화');
+    setBanner(`LEVEL UP! Lv.${player.level}`, `스킬 포인트 +1 (보유 ${player.points}) — T키로 스킬트리`);
+    once('treeHint', () => say('sys', 'T키: 스킬트리 (소환계·레거시 시학·야인의 근성) · I키: 가방/장비', 6));
     for (const s of summons) { s.dmg *= 1.08; s.maxHp *= 1.08; s.hp = s.maxHp; }
   }
 }
@@ -466,29 +679,31 @@ function update(dt) {
         if (d2 < best) { best = d2; target = e; }
       }
     }
+    const aura = 1 + getStat('auraSpd'); // 군단장 오라: 이속/공속
     if (target) {
       const d = Math.sqrt(dist2(s, target)) || 1;
       if (d > s.range + target.r) {
-        s.x += (target.x - s.x) / d * s.speed * dt;
-        s.y += (target.y - s.y) / d * s.speed * dt;
+        s.x += (target.x - s.x) / d * s.speed * aura * dt;
+        s.y += (target.y - s.y) / d * s.speed * aura * dt;
       } else if (s.atkTimer <= 0) {
-        s.atkTimer = s.cooldown;
+        s.atkTimer = s.cooldown / aura;
+        const dmg = s.dmg * minionDmgFactor();
         if (s.ranged) {
           AudioSys.sfx.drill();
           projectiles.push({
             x: s.x, y: s.y,
             vx: (target.x - s.x) / d * 380, vy: (target.y - s.y) / d * 380,
-            dmg: s.dmg, life: 1.1, t: 0, color: s.color,
+            dmg, life: 1.1, t: 0, color: s.color,
           });
         } else {
-          damageEnemy(target, s.dmg, s.color);
+          damageEnemy(target, dmg, s.color);
         }
       }
     } else {
       const d = Math.sqrt(dist2(s, player));
       if (d > 80) {
-        s.x += (player.x - s.x) / d * s.speed * dt;
-        s.y += (player.y - s.y) / d * s.speed * dt;
+        s.x += (player.x - s.x) / d * s.speed * aura * dt;
+        s.y += (player.y - s.y) / d * s.speed * aura * dt;
       }
     }
   }
@@ -588,10 +803,28 @@ function update(dt) {
     if (d < player.r + 10) {
       o.got = true;
       AudioSys.sfx.pickup();
-      if (o.kind === 'xp') gainXp(o.v); else game.coins += o.v;
+      if (o.kind === 'xp') gainXp(o.v); else game.coins += Math.round(o.v * (1 + getStat('tokenGain')));
     }
   }
   orbs = orbs.filter(o => !o.got);
+
+  // 바닥 아이템 줍기 (밟으면 획득)
+  for (const g of groundItems) {
+    if (dist2(g, player) < 30 * 30) pickupItem(g);
+  }
+  groundItems = groundItems.filter(g => !g.got);
+
+  // 타건 장판 (DPS존)
+  for (const z of zones) {
+    z.t += dt;
+    for (const e of enemies) {
+      if (!e.dead && dist2(z, e) < 90 * 90) {
+        e.zoneTick = (e.zoneTick || 0) - dt;
+        if (e.zoneTick <= 0) { e.zoneTick = 0.5; damageEnemy(e, z.dps * 0.5, '#ffd88a'); }
+      }
+    }
+  }
+  zones = zones.filter(z => z.t < z.dur);
 
   for (const c of corpses) c.t += dt;
   corpses = corpses.filter(c => !c.used && c.t < 25);
@@ -768,7 +1001,9 @@ function drawHud() {
   ctx.fillStyle = '#c2cad9'; ctx.font = '11px sans-serif';
   ctx.fillText(`남은 버그 ${enemies.length} · 처치 ${game.kills} · 커밋토큰 ${game.coins}`, 200, 17);
   ctx.textAlign = 'right';
-  ctx.fillText(`Lv.${player.level} · BGM [M] ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
+  const ptsTag = player.points > 0 ? ` · ⚡트리 T (+${player.points})` : ' · 트리 T';
+  ctx.fillStyle = player.points > 0 && Math.floor(game.time * 2) % 2 ? '#ffd700' : '#c2cad9';
+  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
 
   // 미니맵 (우상단)
   const MM = 124, mx = W - MM - 12, my = 34;
@@ -849,6 +1084,172 @@ function drawHud() {
   }
 }
 
+// ---------- 스킬트리 / 인벤토리 패널 ----------
+const PANEL = { x: 70, y: 46, w: W - 140, h: H - 100 };
+function nodePos(n) {
+  const colW = PANEL.w / 3;
+  return { x: PANEL.x + colW * (n.br + 0.5), y: PANEL.y + 86 + n.row * 76 };
+}
+function panelClick(sx, sy) {
+  // 닫기 버튼
+  if (sx > PANEL.x + PANEL.w - 34 && sx < PANEL.x + PANEL.w - 6 && sy > PANEL.y + 6 && sy < PANEL.y + 34) {
+    game.panel = null; return;
+  }
+  if (game.panel === 'tree') {
+    for (const n of TREE) {
+      const p = nodePos(n);
+      if ((sx - p.x) ** 2 + (sy - p.y) ** 2 < 22 * 22) { allocNode(n); return; }
+    }
+  } else if (game.panel === 'inv') {
+    for (let i = 0; i < SLOTS.length; i++) {
+      const p = equipSlotPos(i);
+      if (sx > p.x && sx < p.x + 52 && sy > p.y && sy < p.y + 52) { unequipItem(SLOTS[i]); return; }
+    }
+    for (let i = 0; i < 24; i++) {
+      const p = invCellPos(i);
+      if (sx > p.x && sx < p.x + 46 && sy > p.y && sy < p.y + 46) { equipItem(i); return; }
+    }
+  }
+}
+function equipSlotPos(i) {
+  return { x: PANEL.x + 40 + (i % 2) * 66, y: PANEL.y + 90 + Math.floor(i / 2) * 66 };
+}
+function invCellPos(i) {
+  return { x: PANEL.x + 250 + (i % 6) * 52, y: PANEL.y + 90 + Math.floor(i / 6) * 52 };
+}
+function drawPanelFrame(title, sub) {
+  ctx.fillStyle = 'rgba(5,7,12,0.93)';
+  ctx.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+  ctx.strokeStyle = '#3a4560'; ctx.lineWidth = 2;
+  ctx.strokeRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+  ctx.fillStyle = '#ffb648';
+  ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(title, PANEL.x + 20, PANEL.y + 30);
+  ctx.fillStyle = '#8a97b8'; ctx.font = '11px sans-serif';
+  ctx.fillText(sub, PANEL.x + 20, PANEL.y + 48);
+  ctx.fillStyle = '#ff9c9c'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('✕', PANEL.x + PANEL.w - 20, PANEL.y + 26);
+}
+function drawItemTooltip(item, sx, sy) {
+  const rc = RARITY[item.rarity];
+  const lines = [`${item.name}`, `[${rc.name}] ${SLOT_NAMES[item.slot]}`, ...item.affixes.map(affixLabel)];
+  if (item.quote) lines.push(item.quote);
+  ctx.font = '11px sans-serif';
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 20;
+  const h = lines.length * 16 + 14;
+  const bx = clamp(sx + 14, 4, W - w - 4), by = clamp(sy - h - 6, 4, H - h - 4);
+  ctx.fillStyle = 'rgba(5,7,12,0.96)';
+  ctx.fillRect(bx, by, w, h);
+  ctx.strokeStyle = rc.color; ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, w, h);
+  ctx.textAlign = 'left';
+  lines.forEach((l, i) => {
+    ctx.fillStyle = i === 0 ? rc.color : i === 1 ? '#8a97b8' : item.quote && i === lines.length - 1 ? '#c2a56a' : '#c8e6ff';
+    ctx.font = i === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
+    ctx.fillText(l, bx + 10, by + 18 + i * 16);
+  });
+}
+function drawTreePanel() {
+  drawPanelFrame('스킬트리 — 바이브 코딩 흑마법서', `보유 포인트 ${player.points} · 노드 클릭으로 습득 · 레벨업마다 +1`);
+  const colW = PANEL.w / 3;
+  for (let b = 0; b < 3; b++) {
+    ctx.fillStyle = BRANCH_COLORS[b];
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(BRANCH_NAMES[b], PANEL.x + colW * (b + 0.5), PANEL.y + 70);
+  }
+  // 연결선
+  for (const n of TREE) {
+    if (!n.req) continue;
+    const a = nodePos(TREE.find(t => t.id === n.req)), b = nodePos(n);
+    ctx.strokeStyle = (player.tree[n.req] > 0) ? BRANCH_COLORS[n.br] : '#2a3142';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  // 노드
+  let hover = null;
+  for (const n of TREE) {
+    const p = nodePos(n);
+    const r = player.tree[n.id] || 0;
+    const reqOk = !n.req || player.tree[n.req] > 0;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 17, 0, Math.PI * 2);
+    ctx.fillStyle = r >= n.max ? BRANCH_COLORS[n.br] : r > 0 ? 'rgba(126,224,163,0.25)' : reqOk ? '#1c2234' : '#12151f';
+    ctx.fill();
+    ctx.strokeStyle = r > 0 ? BRANCH_COLORS[n.br] : reqOk && player.points > 0 ? '#8a97b8' : '#2a3142';
+    ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = r >= n.max ? '#12161f' : '#e6e6e6';
+    ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(`${r}/${n.max}`, p.x, p.y + 4);
+    ctx.fillStyle = r > 0 ? BRANCH_COLORS[n.br] : '#9aa4b8';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(n.name, p.x, p.y + 32);
+    if ((mouse.sx - p.x) ** 2 + (mouse.sy - p.y) ** 2 < 22 * 22) hover = n;
+  }
+  if (hover) {
+    ctx.font = '11px sans-serif';
+    const w = ctx.measureText(hover.desc).width + 20;
+    const bx = clamp(mouse.sx + 12, 4, W - w - 4), by = clamp(mouse.sy - 46, 4, H - 50);
+    ctx.fillStyle = 'rgba(5,7,12,0.96)'; ctx.fillRect(bx, by, w, 40);
+    ctx.strokeStyle = BRANCH_COLORS[hover.br]; ctx.strokeRect(bx, by, w, 40);
+    ctx.fillStyle = BRANCH_COLORS[hover.br]; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(hover.name, bx + 10, by + 16);
+    ctx.fillStyle = '#c8e6ff'; ctx.font = '11px sans-serif';
+    ctx.fillText(hover.desc, bx + 10, by + 32);
+  }
+}
+function drawInvPanel() {
+  drawPanelFrame('가방 & 장비 — 판교 파밍의 결실', `장비 클릭 = 해제 · 가방 클릭 = 장착 · 바닥템은 밟으면 획득 (${player.inv.length}/24)`);
+  ctx.fillStyle = '#8a97b8'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('장착 중', PANEL.x + 40, PANEL.y + 80);
+  ctx.fillText('가방', PANEL.x + 250, PANEL.y + 80);
+  let hoverItem = null;
+  for (let i = 0; i < SLOTS.length; i++) {
+    const p = equipSlotPos(i);
+    const it = player.equip[SLOTS[i]];
+    ctx.fillStyle = 'rgba(28,34,52,0.9)';
+    ctx.fillRect(p.x, p.y, 52, 52);
+    ctx.strokeStyle = it ? RARITY[it.rarity].color : '#2a3142';
+    ctx.lineWidth = 1.5; ctx.strokeRect(p.x, p.y, 52, 52);
+    ctx.fillStyle = '#5d6b8a'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(SLOT_NAMES[SLOTS[i]], p.x + 26, p.y + (it ? 49 : 30));
+    if (it) {
+      ctx.fillStyle = RARITY[it.rarity].color;
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText(it.name[0], p.x + 26, p.y + 28);
+      if (mouse.sx > p.x && mouse.sx < p.x + 52 && mouse.sy > p.y && mouse.sy < p.y + 52) hoverItem = it;
+    }
+  }
+  // 합산 스탯 요약
+  ctx.fillStyle = '#8a97b8'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('합산 효과', PANEL.x + 40, PANEL.y + 310);
+  const keys = ['minionDmg', 'minionHp', 'boomDmg', 'maxHp', 'manaRegen', 'moveSpd', 'tokenGain', 'ultGain', 'summonCost'];
+  let sy2 = PANEL.y + 328;
+  ctx.font = '10px sans-serif';
+  for (const k of keys) {
+    const v = getStat(k);
+    if (!v) continue;
+    ctx.fillStyle = '#c8e6ff';
+    ctx.fillText(affixLabel({ key: k, v }), PANEL.x + 40, sy2);
+    sy2 += 14;
+  }
+  for (let i = 0; i < 24; i++) {
+    const p = invCellPos(i);
+    const it = player.inv[i];
+    ctx.fillStyle = 'rgba(28,34,52,0.9)';
+    ctx.fillRect(p.x, p.y, 46, 46);
+    ctx.strokeStyle = it ? RARITY[it.rarity].color : '#232a3a';
+    ctx.lineWidth = 1.5; ctx.strokeRect(p.x, p.y, 46, 46);
+    if (it) {
+      ctx.fillStyle = RARITY[it.rarity].color;
+      ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(it.name[0], p.x + 23, p.y + 22);
+      ctx.fillStyle = '#5d6b8a'; ctx.font = '8px sans-serif';
+      ctx.fillText(SLOT_NAMES[it.slot], p.x + 23, p.y + 40);
+      if (mouse.sx > p.x && mouse.sx < p.x + 46 && mouse.sy > p.y && mouse.sy < p.y + 46) hoverItem = it;
+    }
+  }
+  if (hoverItem) drawItemTooltip(hoverItem, mouse.sx, mouse.sy);
+}
+
 // ---------- 스토리 오버레이 ----------
 function drawStory() {
   const st = game.story;
@@ -875,6 +1276,15 @@ function render() {
   if (game.shake > 0) ctx.translate(rand(-game.shake, game.shake), rand(-game.shake, game.shake));
   drawFloor();
 
+  // 타건 장판 (DPS존)
+  for (const z of zones) {
+    const s = toScreen(z.x, z.y);
+    ctx.globalAlpha = 0.35 * (1 - z.t / z.dur) + 0.1;
+    ctx.fillStyle = '#ffb648';
+    ctx.beginPath(); ctx.ellipse(s.x, s.y, 82, 41, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
   // 시체
   for (const c of corpses) {
     const s = toScreen(c.x, c.y);
@@ -893,6 +1303,26 @@ function render() {
     ctx.fillStyle = o.kind === 'coin' ? '#ffd700' : '#7ee0a3';
     ctx.fill();
   }
+  // 바닥 아이템 (POE식 드랍 라벨)
+  for (const g of groundItems) {
+    const s = toScreen(g.x, g.y);
+    if (s.x < -60 || s.x > W + 60 || s.y < -40 || s.y > H + 40) continue;
+    const rc = RARITY[g.item.rarity];
+    ctx.save();
+    ctx.translate(s.x, s.y - 6);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = rc.color;
+    ctx.fillRect(-5, -5, 10, 10);
+    ctx.restore();
+    ctx.font = 'bold 10px sans-serif';
+    const tw = ctx.measureText(g.item.name).width;
+    ctx.fillStyle = 'rgba(8,10,16,0.8)';
+    ctx.fillRect(s.x - tw / 2 - 4, s.y - 32, tw + 8, 14);
+    ctx.fillStyle = rc.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(g.item.name, s.x, s.y - 21);
+  }
+
   // 이동 목적지 마커
   if (player.moveTarget) {
     const s = toScreen(player.moveTarget.x, player.moveTarget.y);
@@ -999,9 +1429,6 @@ function render() {
 
   drawHud();
 
-  // 스토리 오버레이
-  if (game.story) drawStory();
-
   // 배너
   if (game.banner) {
     const a = game.banner.t < 0.3 ? game.banner.t / 0.3 : game.banner.t > 2.4 ? (3 - game.banner.t) / 0.6 : 1;
@@ -1019,6 +1446,13 @@ function render() {
     }
     ctx.globalAlpha = 1;
   }
+
+  // 패널 (스킬트리 / 인벤토리) — 배너 위에 그린다
+  if (game.panel === 'tree') drawTreePanel();
+  else if (game.panel === 'inv') drawInvPanel();
+
+  // 스토리 오버레이
+  if (game.story) drawStory();
   ctx.restore();
 }
 
@@ -1028,7 +1462,7 @@ function loop(ts) {
   const dt = Math.min((ts - last) / 1000, 0.05);
   last = ts;
   if (game.story) game.story.t += dt;
-  if (game.running) update(dt);
+  if (game.running && !game.panel) update(dt); // 패널 열림 = 일시정지
   render();
   requestAnimationFrame(loop);
 }
