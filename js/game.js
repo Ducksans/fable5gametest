@@ -104,6 +104,8 @@ canvas.addEventListener('wheel', e => {
 function leftCommand() {
   // 몬스터 클릭 = 지휘("저기 쳐" — 로어 17의 R 지휘를 좌클릭으로), 바닥 클릭 = 이동
   const wpt = toWorld(mouse.sx, mouse.sy);
+  // 상점 NPC 클릭 (E)
+  if (npc && dist2(wpt, npc) < 34 * 34 && dist2(player, npc) < 90 * 90) { game.panel = 'shop'; AudioSys.sfx.click(); return; }
   let picked = null, best = 40 * 40;
   for (const e of enemies) {
     const d2 = dist2(wpt, e);
@@ -128,6 +130,7 @@ let dialogues = []; // {speaker, color, text, t, life}
 let groundItems = []; // 바닥 드랍템 {x, y, item}
 let zones = [];       // 타건 장판 {x, y, t, dur, dps}
 let hazards = [];     // 적대 장판(밤의 여왕 널 참조) {x, y, t, dur, r, tick}
+let npc = null;       // 상점 NPC (E) {x, y, name}
 
 // ---------- 세션 실황 (K키) — 이 채팅이 게임으로 흘러든다 ----------
 let streamData = null;   // GitHub에서 불러온 최신 스트림
@@ -285,7 +288,7 @@ function resetGame(act) {
     running: false, time: 0,
     act: act || 1,
     kills: act ? game.kills : 0, coins: act ? (game.coins || 0) : 0,
-    frag: act ? (game.frag || 0) : 0,
+    frag: act ? (game.frag || 0) : 0, tier: act ? (game.tier || 1) : 1,
     ultGauge: 0, banner: null, shake: 0,
     focusTarget: null, bossDown: false, actClearT: 0,
     flags: act ? game.flags : {}, story: null, panel: null,
@@ -796,11 +799,22 @@ function bossAI(e, dt) {
   return null;
 }
 
-// ---------- 월드 생성 (판교역 3번 출구 → 넥슨 사옥 방향) ----------
+// ---------- 존 (E) — ACT마다 다른 지역 (로어 17/18/19) ----------
+const ZONES = [
+  { id: 'station', name: '판교역 3번 출구', floorA: '#1a2438', floorB: '#17202f', spawnGlow: '#5b8def',
+    landmark: '판교역 3번 출구 ▶', bossName: '레거시 유적지', deco: '#3d4a6e' },
+  { id: 'mall', name: '현대백화점 (장비 파밍존)', floorA: '#2a2038', floorB: '#241a30', spawnGlow: '#c792ea',
+    landmark: '현대백화점 정문 ▶', bossName: '5F 미니보스', deco: '#6e5a8e' },
+  { id: 'nexon', name: '넥슨 사옥 (엔드 레이드)', floorA: '#28221a', floorB: '#221c14', spawnGlow: '#ffb648',
+    landmark: '넥슨 사옥 로비 ▶', bossName: '크런치 심연', deco: '#8e7a4e' },
+];
+const NAMED_TITLES = ['판교의 악몽', '무한야근', '데드락 군주', '메모리누수왕', '스택오버플로'];
+function curZone() { return ZONES[(game.act - 1) % ZONES.length]; }
 function buildWorld() {
-  const mult = 1 + (game.act - 1) * 0.45;
+  game.tier = game.tier || 1;
+  const mult = (1 + (game.act - 1) * 0.45) * (1 + (game.tier - 1) * 0.6); // 월드 티어 스케일
   decos = [];
-  // 몹팩: 스폰(320,320)에서 멀수록 강하게
+  npc = { x: 320, y: 400, name: '코드리뷰 현자' }; // 상점 NPC (E)
   const packs = 15;
   for (let p = 0; p < packs; p++) {
     let px, py, dSpawn;
@@ -808,22 +822,24 @@ function buildWorld() {
       px = rand(200, WORLD - 200); py = rand(200, WORLD - 200);
       dSpawn = Math.hypot(px - 320, py - 320);
     } while (dSpawn < 480 || Math.hypot(px - 1900, py - 1900) < 380);
-    const tier = dSpawn / 2500; // 0~1
+    const tierD = dSpawn / 2500;
     const n = 3 + Math.floor(rand(2, 5));
     for (let i = 0; i < n; i++) {
       const roll = Math.random();
       let type = 'nullptr';
-      if (tier > 0.25 && roll < 0.22) type = 'infloop';
+      if (tierD > 0.25 && roll < 0.22) type = 'infloop';
       else if (roll < 0.45) type = 'race';
       spawnEnemyAt(type, px + rand(-70, 70), py + rand(-70, 70), mult);
     }
-    if (tier > 0.45 && Math.random() < 0.5) spawnEnemyAt('elite', px, py, mult);
+    if (tierD > 0.45 && Math.random() < 0.5) {
+      const el = spawnEnemyAt('elite', px, py, mult);
+      // 네임드 몬스터 (E) — 드물게 이름+유니크 드랍 보장
+      if (Math.random() < 0.22) { el.named = true; el.name = '★' + NAMED_TITLES[Math.floor(rand(0, NAMED_TITLES.length))]; el.hp *= 1.6; el.maxHp = el.hp; el.r += 3; }
+    }
   }
-  // 보스 아레나 (넥슨 사옥 방향 끝) — ACT마다 다른 보스
   const bdef = BOSSES[(game.act - 1) % BOSSES.length];
   spawnBoss(bdef, 1900, 1900, mult);
   for (let i = 0; i < 5; i++) spawnEnemyAt('nullptr', 1900 + rand(-140, 140), 1900 + rand(-140, 140), mult);
-  // 장식: 가로등/화분 (아이소 기둥)
   for (let i = 0; i < 26; i++) decos.push({ x: rand(150, WORLD - 150), y: rand(150, WORLD - 150), h: rand(28, 60) });
 }
 
@@ -877,7 +893,9 @@ function damageEnemy(e, dmg, color, opts) {
     }
     // POE식 아이템 + 무결성 파편 드랍
     if (e.boss) { dropItem(e.x, e.y, 'rare'); dropItem(e.x, e.y, 'rare'); if (Math.random() < 0.5) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 5; }
-    else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 1; }
+    else if (e.elite) { if (Math.random() < 0.6) dropItem(e.x, e.y); if (Math.random() < 0.08) dropItem(e.x, e.y, 'unique'); game.frag = (game.frag || 0) + 1;
+      if (e.named) { dropItem(e.x, e.y, 'unique'); dropItem(e.x, e.y, 'rare'); game.frag += 4; setBanner(`${e.name} 처치!`, '네임드 몬스터 — 유니크 확정 드랍'); }
+    }
     else if (Math.random() < 0.07) dropItem(e.x, e.y);
     else if (Math.random() < 0.04) game.frag = (game.frag || 0) + 1;
     // 포션 충전 리필 (D)
@@ -942,18 +960,22 @@ function update(dt) {
   // 전투 쿨/버프 (D)
   player.dashCd = Math.max(0, (player.dashCd || 0) - dt);
   if (player.buffT > 0) player.buffT -= dt;
+  // 상점 NPC 근접 (E) — 가까이 가면 자동 안내, 클릭으로 상점
+  if (npc && dist2(npc, player) < 70 * 70) { once('npcHint', () => say('sys', '코드리뷰 현자: NPC를 클릭하면 상점이 열립니다.', 4)); }
 
   // ACT 클리어 → 다음 ACT
   if (game.bossDown) {
     game.actClearT -= dt;
     if (game.actClearT <= 0) {
       const act = game.act + 1;
+      if ((act - 1) % ZONES.length === 0) game.tier = (game.tier || 1) + 1; // 3존 완주 → 월드 티어↑
       resetGame(act);
       game.running = true;
       saveGame(); // ACT 돌파 = 진행 저장
-      setBanner(`ACT ${act} — 판교는 넓다`, '난이도 상승 · 레벨과 커밋토큰은 유지된다');
-      say('sys', `ACT ${act}: 더 깊은 판교. 버그들이 강해졌다.`);
-      say('ducksan', act === 2 ? '한 블록 접수했다. 다음은 현대백화점 방면이다.' : '판교는 넓다. 계속 간다.');
+      const z = curZone();
+      setBanner(`ACT ${act} — ${z.name}`, game.tier > 1 ? `월드 티어 ${game.tier} · 난이도 대폭 상승 · 보상↑` : '난이도 상승 · 레벨·재화 유지');
+      say('sys', `ACT ${act}: ${z.name}${game.tier > 1 ? ` (티어 ${game.tier})` : ''}`);
+      say('ducksan', z.id === 'mall' ? '현대백화점이다. 장비 좀 빼입자.' : z.id === 'nexon' ? '넥슨 사옥. 여기가 끝판이다.' : '판교는 넓다. 계속 간다.');
       return;
     }
   }
@@ -1196,9 +1218,10 @@ function drawFloor() {
       if (Math.max(p0.x, p2.x) < -TILE || Math.min(p0.x, p2.x) > W + TILE) continue;
       if (p1.y < -TILE || p3.y > H + TILE * 2) continue;
       const cx = (i + 0.5) * TILE, cy = (j + 0.5) * TILE;
+      const z = curZone();
       let fill = (i + j) % 2 ? '#141926' : '#111623';
-      if (Math.hypot(cx - 320, cy - 320) < 260) fill = (i + j) % 2 ? '#1a2438' : '#17202f';        // 판교역 광장
-      if (Math.hypot(cx - 1900, cy - 1900) < 320) fill = (i + j) % 2 ? '#2a1a1a' : '#241616';      // 보스 아레나
+      if (Math.hypot(cx - 320, cy - 320) < 260) fill = (i + j) % 2 ? z.floorA : z.floorB;             // 존 광장
+      if (Math.hypot(cx - 1900, cy - 1900) < 320) fill = (i + j) % 2 ? '#2a1a1a' : '#241616';         // 보스 아레나
       ctx.fillStyle = fill;
       ctx.beginPath();
       ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y);
@@ -1207,27 +1230,40 @@ function drawFloor() {
       ctx.stroke();
     }
   }
-  // 판교역 3번 출구 표지판 (스폰 랜드마크)
+  const zn = curZone();
+  // 존 랜드마크 표지판
   const sign = toScreen(320, 200);
   if (sign.x > -100 && sign.x < W + 100 && sign.y > -60 && sign.y < H + 60) {
     ctx.fillStyle = '#1e2a44';
-    ctx.fillRect(sign.x - 74, sign.y - 58, 148, 30);
-    ctx.fillStyle = '#9cc4ff';
-    ctx.font = 'bold 13px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('판교역 3번 출구 ▶', sign.x, sign.y - 38);
+    ctx.fillRect(sign.x - 84, sign.y - 58, 168, 30);
+    ctx.fillStyle = zn.spawnGlow;
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(zn.landmark, sign.x, sign.y - 38);
     ctx.strokeStyle = '#33415e';
     ctx.beginPath(); ctx.moveTo(sign.x, sign.y - 28); ctx.lineTo(sign.x, sign.y); ctx.stroke();
   }
-  // 넥슨 사옥 방향 안내
+  // 보스 방향 안내
   const nx = toScreen(1900, 1760);
   if (nx.x > -100 && nx.x < W + 100 && nx.y > -60 && nx.y < H + 60) {
     ctx.fillStyle = '#442020';
     ctx.fillRect(nx.x - 88, nx.y - 58, 176, 30);
     ctx.fillStyle = '#ff9c9c';
-    ctx.font = 'bold 13px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('⚠ 레거시 유적지 (보스)', nx.x, nx.y - 38);
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('⚠ ' + zn.bossName + ' (보스)', nx.x, nx.y - 38);
+  }
+  // 상점 NPC (E)
+  if (npc) {
+    const np = toScreen(npc.x, npc.y);
+    if (np.x > -60 && np.x < W + 60 && np.y > -60 && np.y < H + 60) {
+      shadow(np, 12, 0.4);
+      ctx.fillStyle = '#4a5570'; ctx.fillRect(np.x - 7, np.y - 24, 14, 22); // 로브
+      ctx.fillStyle = '#e6c9a0'; ctx.beginPath(); ctx.arc(np.x, np.y - 28, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffd54a'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🧙', np.x, np.y - 24);
+      const near = dist2(npc, player) < 90 * 90;
+      ctx.fillStyle = near ? '#ffd88a' : '#8a97b8'; ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(near ? '🛒 클릭: 상점' : npc.name, np.x, np.y - 40);
+    }
   }
 }
 
@@ -1665,7 +1701,7 @@ function drawHud() {
   ctx.fillRect(0, 0, W, 26);
   ctx.fillStyle = '#ffd88a';
   ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText(`ACT ${game.act} — 판교역 3번 출구`, 12, 17);
+  ctx.fillText(`ACT ${game.act} — ${curZone().name}${(game.tier || 1) > 1 ? ` · 티어 ${game.tier}` : ''}`, 12, 17);
   ctx.fillStyle = '#c2cad9'; ctx.font = '11px sans-serif';
   ctx.fillText(`남은 버그 ${enemies.length} · 처치 ${game.kills} · 커밋토큰 ${game.coins}`, 200, 17);
   ctx.textAlign = 'right';
@@ -1811,6 +1847,7 @@ function panelClick(sx, sy) {
     game.panel = null; return;
   }
   if (game.panel === 'char') { charPanelClick(sx, sy); return; }
+  if (game.panel === 'shop') { shopPanelClick(sx, sy); return; }
   if (game.panel === 'tree') {
     for (const n of TREE) {
       const p = nodePos(n);
@@ -1990,6 +2027,56 @@ function drawStreamPanel() {
   }
   ctx.fillStyle = '#6a7690'; ctx.font = 'italic 10px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('…이 순간도 흘러들고 있다 — 坐卽板橋', W / 2, PANEL.y + PANEL.h - 9);
+}
+
+// ---------- 상점 (E) — 코드리뷰 현자 ----------
+const SHOP_ITEMS = [
+  { id: 'refill', name: '포션 전체 충전', cost: 20, cur: 'coins', desc: '모든 포션을 최대로' },
+  { id: 'item', name: '랜덤 레어 장비', cost: 45, cur: 'coins', desc: '레어 아이템 1개 (가방)' },
+  { id: 'gem', name: '랜덤 젬', cost: 30, cur: 'coins', desc: '소켓용 젬 1개' },
+  { id: 'unique', name: '유니크 상자', cost: 120, cur: 'coins', desc: '유니크 아이템 1개' },
+  { id: 'frag', name: '무결성 파편 ×5', cost: 40, cur: 'coins', desc: '리롤용 파편' },
+  { id: 'reroll', name: '레어/매직 리롤', cost: 3, cur: 'frag', desc: '랜덤 리롤 (파편)' },
+];
+function shopRowY(i) { return PANEL.y + 96 + i * 46; }
+function shopBuy(it) {
+  const have = it.cur === 'coins' ? game.coins : (game.frag || 0);
+  if (have < it.cost) { say('sys', `${it.cur === 'coins' ? '커밋토큰' : '무결성 파편'} 부족`, 2); return; }
+  if (it.id === 'item' || it.id === 'unique' || it.id === 'gem') { if (player.inv.length >= 24) { say('sys', '가방이 가득 찼다', 2); return; } }
+  if (it.cur === 'coins') game.coins -= it.cost; else game.frag -= it.cost;
+  if (it.id === 'refill') { player.potions.forEach((p) => p.charges = p.max); }
+  else if (it.id === 'item') player.inv.push(rollItem('rare'));
+  else if (it.id === 'unique') player.inv.push(rollItem('unique'));
+  else if (it.id === 'gem') player.inv.push(rollGem());
+  else if (it.id === 'frag') game.frag = (game.frag || 0) + 5;
+  else if (it.id === 'reroll') { rerollRandomRare(0); }
+  AudioSys.sfx.pickup(); saveGame();
+}
+function shopPanelClick(sx, sy) {
+  for (let i = 0; i < SHOP_ITEMS.length; i++) {
+    const y = shopRowY(i);
+    if (sx > PANEL.x + 30 && sx < PANEL.x + PANEL.w - 30 && sy > y - 18 && sy < y + 20) { shopBuy(SHOP_ITEMS[i]); return; }
+  }
+}
+function drawShopPanel() {
+  drawPanelFrame('상점 — 코드리뷰 현자', `커밋토큰 ${game.coins} · 무결성 파편 ${game.frag || 0} · 클릭하여 구매 · ESC 닫기`);
+  ctx.textAlign = 'left';
+  for (let i = 0; i < SHOP_ITEMS.length; i++) {
+    const it = SHOP_ITEMS[i], y = shopRowY(i);
+    const have = it.cur === 'coins' ? game.coins : (game.frag || 0);
+    const afford = have >= it.cost;
+    ctx.fillStyle = afford ? 'rgba(30,40,60,0.8)' : 'rgba(20,24,34,0.7)';
+    ctx.fillRect(PANEL.x + 30, y - 18, PANEL.w - 60, 38);
+    ctx.strokeStyle = afford ? '#3a5570' : '#2a3142'; ctx.strokeRect(PANEL.x + 30, y - 18, PANEL.w - 60, 38);
+    ctx.fillStyle = afford ? '#ffd88a' : '#6a7690'; ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(it.name, PANEL.x + 44, y);
+    ctx.fillStyle = '#8a97b8'; ctx.font = '11px sans-serif';
+    ctx.fillText(it.desc, PANEL.x + 44, y + 15);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = it.cur === 'coins' ? '#ffd700' : '#7ee0a3'; ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(`${it.cost} ${it.cur === 'coins' ? '토큰' : '파편'}`, PANEL.x + PANEL.w - 44, y + 6);
+    ctx.textAlign = 'left';
+  }
 }
 
 // ---------- 캐릭터 시트 (C) — 스탯 배분·리스펙 ----------
@@ -2403,6 +2490,7 @@ function render() {
   else if (game.panel === 'log') drawLogPanel();
   else if (game.panel === 'stream') drawStreamPanel();
   else if (game.panel === 'char') drawCharPanel();
+  else if (game.panel === 'shop') drawShopPanel();
 
   // 스토리 오버레이
   if (game.story) drawStory();
@@ -2437,7 +2525,7 @@ function saveGame() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       v: 1, ts: Date.now(),
-      act: game.act, coins: game.coins, frag: game.frag || 0, kills: game.kills, comboMax: game.comboMax || 0,
+      act: game.act, tier: game.tier || 1, coins: game.coins, frag: game.frag || 0, kills: game.kills, comboMax: game.comboMax || 0,
       flags: game.flags || {},
       p: {
         level: player.level, xp: player.xp, xpNext: player.xpNext,
@@ -2459,6 +2547,7 @@ function loadSave() {
 function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { } }
 function applySave(s) {
   game.flags = s.flags || {};
+  game.tier = s.tier || 1;
   game.coins = s.coins || 0; game.frag = s.frag || 0; game.kills = s.kills || 0; game.comboMax = s.comboMax || 0;
   player = newPlayer();
   Object.assign(player, {
