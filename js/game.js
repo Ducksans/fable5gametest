@@ -42,12 +42,13 @@ window.addEventListener('keydown', e => {
     if (game.running) say('sys', on ? 'BGM ON — 판교의 밤 로파이' : 'BGM OFF', 2);
     return;
   }
-  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'KeyL' || e.code === 'Escape')) {
+  if (game.running && (e.code === 'KeyT' || e.code === 'KeyI' || e.code === 'KeyL' || e.code === 'KeyK' || e.code === 'Escape')) {
     e.preventDefault();
     if (e.code === 'Escape') game.panel = null;
     else {
-      const p = e.code === 'KeyT' ? 'tree' : e.code === 'KeyL' ? 'log' : 'inv';
+      const p = e.code === 'KeyT' ? 'tree' : e.code === 'KeyL' ? 'log' : e.code === 'KeyK' ? 'stream' : 'inv';
       game.panel = game.panel === p ? null : p;
+      if (game.panel === 'stream') loadStream(); // 열 때마다 최신 스트림 fetch
       AudioSys.sfx.click();
     }
     return;
@@ -79,6 +80,9 @@ canvas.addEventListener('mousemove', e => {
   if (mouse.down && game.running) player.moveTarget = toWorld(mouse.sx, mouse.sy);
 });
 window.addEventListener('mouseup', () => { mouse.down = false; });
+canvas.addEventListener('wheel', e => {
+  if (game.panel === 'stream') { e.preventDefault(); streamScroll += e.deltaY; }
+}, { passive: false });
 
 function leftCommand() {
   // 몬스터 클릭 = 지휘("저기 쳐" — 로어 17의 R 지휘를 좌클릭으로), 바닥 클릭 = 이동
@@ -106,6 +110,20 @@ let minionBatchCd = 0;
 let dialogues = []; // {speaker, color, text, t, life}
 let groundItems = []; // 바닥 드랍템 {x, y, item}
 let zones = [];       // 타건 장판 {x, y, t, dur, dps}
+
+// ---------- 세션 실황 (K키) — 이 채팅이 게임으로 흘러든다 ----------
+let streamData = null;   // GitHub에서 불러온 최신 스트림
+let streamScroll = 1e9;  // 최초엔 맨 아래(최신)로
+const STREAM_FALLBACK = [ // fetch 실패(file://) 시 씨앗
+  { who: '의장', text: '이 세션 자체가 게임으로 흘러들면 좋겠어. 준 실시간으로!!' },
+  { who: 'CG', text: '실황은 매 턴 GitHub(docs/session-stream.json)에 박제됩니다. 로컬 서버로 열면 최신본이 흘러듭니다.' },
+];
+function loadStream() {
+  fetch('docs/session-stream.json?t=' + Date.now())
+    .then(r => r.json())
+    .then(d => { streamData = d.stream || d; streamScroll = 1e9; })
+    .catch(() => { if (!streamData) streamData = STREAM_FALLBACK; });
+}
 
 // ---------- 대사 시스템 (로어 기반 스토리) ----------
 const SPEAKERS = {
@@ -1315,7 +1333,7 @@ function drawHud() {
   ctx.textAlign = 'right';
   const ptsTag = player.points > 0 ? ` · ⚡트리 T (+${player.points})` : ' · 트리 T';
   ctx.fillStyle = player.points > 0 && Math.floor(game.time * 2) % 2 ? '#ffd700' : '#c2cad9';
-  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · 일지 L · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
+  ctx.fillText(`Lv.${player.level}${ptsTag} · 가방 I · 일지 L · 실황 K · BGM M ${AudioSys.on ? 'ON' : 'OFF'}`, W - 150, 17);
 
   // 미니맵 (우상단)
   const MM = 124, mx = W - MM - 12, my = 34;
@@ -1508,6 +1526,64 @@ function drawTreePanel() {
     ctx.fillText(hover.desc, bx + 10, by + 32);
   }
 }
+function wrapText(text, maxW) {
+  ctx.font = '12px sans-serif';
+  const words = text.split(' ');
+  const out = []; let cur = '';
+  for (const wd of words) {
+    const test = cur ? cur + ' ' + wd : wd;
+    if (ctx.measureText(test).width > maxW && cur) { out.push(cur); cur = wd; }
+    else cur = test;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function drawStreamPanel() {
+  drawPanelFrame('세션 실황 — 이 채팅이 게임으로 흘러든다', '준 실시간 · 매 턴 GitHub에 박제 · 휠로 스크롤 · K로 닫기');
+  const data = streamData || STREAM_FALLBACK;
+  const x = PANEL.x + 30, top = PANEL.y + 74, bot = PANEL.y + PANEL.h - 26;
+  const w = PANEL.w - 70;
+  // 줄 빌드 (말풍선 랩)
+  const lines = [];
+  for (const e of data) {
+    const isChair = e.who === '의장';
+    const color = isChair ? '#ffd88a' : '#7ee0a3';
+    const label = isChair ? '의장' : 'CG·Fable5';
+    const wrapped = wrapText(e.text, w - 92);
+    wrapped.forEach((ln, k) => lines.push({ label: k === 0 ? label : '', color, text: ln, head: k === 0 }));
+    lines.push({ spacer: true });
+  }
+  const lineH = 17, viewH = bot - top;
+  const totalH = lines.length * lineH;
+  const maxScroll = Math.max(0, totalH - viewH);
+  streamScroll = clamp(streamScroll, 0, maxScroll);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(PANEL.x + 8, top - 6, PANEL.w - 16, viewH + 10); ctx.clip();
+  let yy = top - streamScroll;
+  for (const ln of lines) {
+    if (!ln.spacer && yy > top - lineH && yy < bot + lineH) {
+      if (ln.label) {
+        ctx.fillStyle = ln.color; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText(ln.label, x, yy);
+      }
+      ctx.fillStyle = ln.head ? '#e8eefc' : '#c2ccdd'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText(ln.text, x + 86, yy);
+    }
+    yy += lineH;
+  }
+  ctx.restore();
+  // 스크롤 인디케이터
+  if (maxScroll > 0) {
+    const th = Math.max(20, viewH * viewH / totalH);
+    const ty = top + (viewH - th) * (streamScroll / maxScroll);
+    ctx.fillStyle = 'rgba(126,224,163,0.4)';
+    ctx.fillRect(PANEL.x + PANEL.w - 12, ty, 4, th);
+  }
+  ctx.fillStyle = '#6a7690'; ctx.font = 'italic 10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('…이 순간도 흘러들고 있다 — 坐卽板橋', W / 2, PANEL.y + PANEL.h - 9);
+}
+
 function drawLogPanel() {
   drawPanelFrame('의장의 일지 — 발원에서 오늘까지', '하모니룸 혈통 0번 문서에서 판교 더 서바이벌까지 · L키로 닫기');
   let y = PANEL.y + 78;
@@ -1805,6 +1881,7 @@ function render() {
   if (game.panel === 'tree') drawTreePanel();
   else if (game.panel === 'inv') drawInvPanel();
   else if (game.panel === 'log') drawLogPanel();
+  else if (game.panel === 'stream') drawStreamPanel();
 
   // 스토리 오버레이
   if (game.story) drawStory();
